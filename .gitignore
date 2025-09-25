@@ -1,0 +1,77 @@
+# 环境变量文件
+.env
+.env.local
+.env.production
+.env.staging
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 上传的文件
+eml_process/uploads/*
+eml_process/processed/*
+eml_process/final_output/*
+!eml_process/uploads/.gitkeep
+!eml_process/processed/.gitkeep
+!eml_process/final_output/.gitkeep
+
+# 配置文件（包含敏感信息）
+config/local_settings.py
+config/production.py
+
+# 测试文件
+test_*.py
+*_test.py
