@@ -12,31 +12,31 @@
 # LLM邮件清洗 API Keys
 # ===================================================
 # 用于邮件内容清洗和结构化处理
-GPTBOTS_LLM_API_KEY_1=app-YourLLMApiKey1
-GPTBOTS_LLM_API_KEY_2=app-YourLLMApiKey2
-GPTBOTS_LLM_API_KEY_3=app-YourLLMApiKey3
+GPTBOTS_LLM_API_KEY_1=app-JfbLb7yTAgtelQLZu7PgWBOE
+GPTBOTS_LLM_API_KEY_2=app-JfbLb7yTAgtelQLZu7PgWBOE
+GPTBOTS_LLM_API_KEY_3=app-JfbLb7yTAgtelQLZu7PgWBOE
 
 # ===================================================
 # 知识库上传 API Keys  
 # ===================================================
 # 用于将处理后的文档上传到GPTBots知识库
-GPTBOTS_KB_API_KEY_1=app-YourKBApiKey1
-GPTBOTS_KB_API_KEY_2=app-YourKBApiKey2
-GPTBOTS_KB_API_KEY_3=app-YourKBApiKey3
+GPTBOTS_KB_API_KEY_1=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_KB_API_KEY_2=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_KB_API_KEY_3=app-qJ3OvJto9sh2QWn9HnoijhD7
 
 # ===================================================
 # 问答系统 API Keys
 # ===================================================
 # 用于智能问答功能，也可以用于知识库操作
-GPTBOTS_QA_API_KEY_1=app-YourQAApiKey1
-GPTBOTS_QA_API_KEY_2=app-YourQAApiKey2
-GPTBOTS_QA_API_KEY_3=app-YourQAApiKey3
+GPTBOTS_QA_API_KEY_1=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_QA_API_KEY_2=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_QA_API_KEY_3=app-qJ3OvJto9sh2QWn9HnoijhD7
 
 # ===================================================
 # 通用配置（向后兼容）
 # ===================================================
 # 主要API Key，用于向后兼容旧配置
-GPTBOTS_API_KEY=app-YourLLMApiKey
+GPTBOTS_API_KEY=app-JfbLb7yTAgtelQLZu7PgWBOE
 
 # ===================================================
 # 其他配置

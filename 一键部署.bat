@@ -147,6 +147,11 @@ echo 🔍 验证依赖包安装...
 python -c "import streamlit; print('✅ Streamlit:', streamlit.__version__)" 2>nul || echo "❌ Streamlit安装失败"
 python -c "import requests; print('✅ Requests:', requests.__version__)" 2>nul || echo "❌ Requests安装失败"
 python -c "import pandas; print('✅ Pandas:', pandas.__version__)" 2>nul || echo "❌ Pandas安装失败"
+python -c "from dotenv import load_dotenv; print('✅ Python-dotenv 可用')" 2>nul || echo "❌ Python-dotenv安装失败"
+python -c "from streamlit_option_menu import option_menu; print('✅ Streamlit-option-menu 可用')" 2>nul || echo "❌ Streamlit-option-menu安装失败"
+
+REM 尝试验证streamlit-mermaid（可选）
+python -c "from streamlit_mermaid import st_mermaid; print('✅ Streamlit-mermaid 可用')" 2>nul || echo "⚠️  Streamlit-mermaid 未安装（可选包）"
 
 REM 检查主要文件是否存在
 echo 🔍 检查项目文件...
@@ -165,7 +170,25 @@ if not exist tools (
     pause
     exit /b 1
 )
+if not exist config (
+    echo ❌ 错误：找不到config目录
+    pause
+    exit /b 1
+)
 echo ✅ 项目文件检查完成
+
+REM 创建.env文件（如果不存在）
+if not exist .env (
+    if exist env_example.txt (
+        echo 📝 创建环境变量配置文件...
+        copy env_example.txt .env >nul
+        echo ✅ 已创建.env文件，请根据需要修改API Key配置
+    ) else (
+        echo ⚠️  未找到env_example.txt，请手动创建.env文件配置API Key
+    )
+) else (
+    echo ✅ .env文件已存在
+)
 
 REM 创建启动脚本
 echo 🚀 创建启动脚本...
