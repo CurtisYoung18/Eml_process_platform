@@ -14,7 +14,7 @@ def show_qa_system_page():
     ### 💬 基于知识库的智能问答
     这是基于GPTBots的智能问答系统，可以回答关于已上传知识库的问题。
     
-    分享链接：[Agent: NolatoEml](https://gptbots.ai/s/csfmLzGO)
+    分享链接：[Agent: NolatoEml](http://10.52.20.41:19080/s/cspI1GSw)
     
     ---
     """)
@@ -27,10 +27,12 @@ def show_qa_system_page():
         width="100%" 
         height="1200px" 
         allow="microphone *" 
-        src="https://www.gptbots.ai/widget/eesy0snwfrcoqgiib8x0nlm/chat.html"
+        src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
         style="border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
     </iframe>
     """
+    
+  
     
     components.html(iframe_html, height=1300)
 

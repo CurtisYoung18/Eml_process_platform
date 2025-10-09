@@ -10,6 +10,13 @@ from .utils import count_files, log_activity
 from .api_selector import create_api_selector_with_guide
 from config import DIRECTORIES
 
+# 尝试导入streamlit_mermaid，如果失败则使用备用方案
+try:
+    from streamlit_mermaid import st_mermaid
+    MERMAID_AVAILABLE = True
+except ImportError:
+    MERMAID_AVAILABLE = False
+
 
 def show_homepage():
     """显示首页概览"""
@@ -86,18 +93,24 @@ def show_process_introduction():
             style G fill:#f1f8e9
         """
         
-        st.components.v1.html(
-            f"""
-            <div class="mermaid">
-            {mermaid_code}
-            </div>
-            <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-            <script>
-                mermaid.initialize({{startOnLoad:true}});
-            </script>
-            """,
-            height=1000
-        )
+        # 使用Mermaid显示流程图
+        if MERMAID_AVAILABLE:
+            st_mermaid(mermaid_code, height="1000px")
+        else:
+            # 备用方案：使用HTML+JavaScript显示Mermaid
+            st.components.v1.html(
+                f"""
+                <div class="mermaid">
+                {mermaid_code}
+                </div>
+                <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+                <script>
+                    mermaid.initialize({{startOnLoad:true, theme: 'default'}});
+                </script>
+                """,
+                height=1000
+            )
+            st.info("💡 提示：如需更好的图表显示效果，请运行 `pip install streamlit-mermaid`")
     
     with col2:
         st.markdown("### 🚀 使用方式")
