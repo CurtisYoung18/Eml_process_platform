@@ -34,20 +34,6 @@
    - 打开 `Eml_process_platform/.env` 文件
    - 填入您的GPTBots API Keys
 
-3. **一键启动**
-
-#### 🪟 Windows系统
-双击桌面上的 `启动邮件处理系统.vbs` 
-
-或进入项目文件夹，双击 `start.bat`
-
-#### 🍎 macOS/Linux系统
-双击桌面上的 `启动邮件处理系统.command`
-
-或进入项目文件夹，运行：
-```bash
-./start.sh
-```
 
 **首次启动说明：**
 - 脚本会自动检测环境
@@ -55,14 +41,6 @@
 - 会自动安装所有依赖包
 - 首次启动可能需要5-10分钟
 - 完成后会自动打开浏览器
-
-### 🛑 停止服务
-
-#### Windows系统
-双击桌面上的 `停止邮件处理系统.vbs`
-
-#### macOS/Linux系统
-双击桌面上的 `停止邮件处理系统.command`
 
 ### 访问系统
 
@@ -131,43 +109,3 @@ Eml_process_platform/
 └── README.md               # 本文档
 ```
 
-## 🔧 开发指南
-
-### 前端开发
-```bash
-cd frontend
-npm run dev       # 开发模式 (http://localhost:3000)
-npm run build     # 生产构建
-npm run start     # 生产运行
-```
-
-### 后端开发
-```bash
-python api_server.py  # API服务 (http://localhost:5000)
-```
-
-## 🐛 故障排除
-
-### 端口占用
-- 修改前端端口: `frontend/package.json` 中的 `dev` 脚本
-- 修改后端端口: `api_server.py` 中的端口号
-
-### 依赖安装失败
-```bash
-# 使用国内镜像
-pip install -r requirements_api.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
-npm install --registry=https://registry.npmmirror.com
-```
-
-## 📝 更新日志
-
-### v2.0.0 (2025-10-16)
-- ✨ 全新React + Next.js前端界面
-- 💬 主页直接展示QA问答系统（iframe）
-- 🔐 添加管理员登录系统
-- 🚀 Flask API后端
-- 📱 现代化响应式设计
-
-## 📄 许可证
-
-本项目仅用于内部使用。
