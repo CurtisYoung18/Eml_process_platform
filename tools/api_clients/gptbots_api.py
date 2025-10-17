@@ -25,24 +25,36 @@ logging.basicConfig(
 )
 
 class GPTBotsAPI:
-    def __init__(self, app_key: str):
+    def __init__(self, app_key: str, conversation_api_url: str = None):
         """
         初始化GPTBots API客户端
         
         Args:
             app_key: API应用密钥
+            conversation_api_url: 对话API URL（可选，默认从环境变量读取）
         """
         self.app_key = app_key
-        # 根据文档设置正确的API地址
-        # 使用新的内网IP地址
-        self.base_url = "http://10.52.20.41:19080"
         
-        # 根据官方文档设置正确的API endpoints
+        # 从环境变量读取API URL，如果没有则使用默认值
+        if conversation_api_url:
+            self.send_message_url = conversation_api_url
+        else:
+            self.send_message_url = os.getenv("GPTBOTS_CONVERSATION_API_URL", "https://api-sg.gptbots.ai/v2/conversation/message")
+            logging.info(f"对话API URL: {self.send_message_url}")
+        
+        # 从send_message_url推断base_url
+        # 例如: https://api-sg.gptbots.ai/v2/conversation/message -> https://api-sg.gptbots.ai
+        if self.send_message_url.startswith('http'):
+            parts = self.send_message_url.split('/')
+            self.base_url = f"{parts[0]}//{parts[2]}"
+        else:
+            self.base_url = "https://api-sg.gptbots.ai"
+        
         self.create_conversation_url = f"{self.base_url}/v1/conversation"
-        self.send_message_url = f"{self.base_url}/v2/conversation/message"
         self.session = requests.Session()
+        self.timeout = 30  # 30秒超时
         
-    def create_conversation(self, user_id: str = "api-user", timeout: int = 180) -> Optional[str]:
+    def create_conversation(self, user_id: str = "api-user", timeout: int = None) -> Optional[str]:
         """
         创建对话ID
         
@@ -67,7 +79,7 @@ class GPTBotsAPI:
                 self.create_conversation_url,
                 headers=headers,
                 json=payload,
-                timeout=timeout
+                timeout=timeout or self.timeout
             )
             
             if response.status_code == 200:
@@ -83,7 +95,7 @@ class GPTBotsAPI:
             logging.error(f"创建对话ID出错: {str(e)}")
             return None
 
-    def send_message(self, conversation_id: str, query: str, timeout: int = 180, max_retries: int = 3) -> Optional[Dict]:
+    def send_message(self, conversation_id: str, query: str, timeout: int = None, max_retries: int = 3) -> Optional[Dict]:
         """
         发送消息到指定对话（带重试机制）
         
@@ -126,7 +138,7 @@ class GPTBotsAPI:
                     self.send_message_url,
                     headers=headers,
                     json=payload,
-                    timeout=timeout
+                    timeout=timeout or self.timeout
                 )
                 
                 if response.status_code == 200:

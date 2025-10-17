@@ -1,200 +1,173 @@
-# 📧 邮件知识库处理系统
+# 📧 邮件知识库处理系统 (React版本)
 
-一个基于Streamlit构建的本地部署应用，支持邮件文件处理、AI智能分析和知识库问答系统。
+基于Next.js + React + Flask构建的现代化邮件处理平台，提供完整的邮件处理、AI智能分析和知识库问答功能。
 
-## 🎯 系统概述
+## 🎯 系统特点
 
-本系统提供完整的邮件处理工作流：
-- 📤 **邮件上传**: 批量上传EML格式邮件文件
-- 🧹 **数据清洗**: 自动提取和清洗邮件内容
-- 🤖 **LLM处理**: 使用AI进行内容结构化和优化
-- 📚 **知识库管理**: 上传到GPTBots知识库
-- 💬 **智能问答**: 基于知识库的问答系统
+- **🎨 现代化UI**: 采用React + Next.js构建，精美的界面设计
+- **💬 QA首页**: 主页面直接展示问答系统（iframe方式）
+- **🔐 权限管理**: 邮件处理功能需要管理员登录
+- **⚡ 高性能**: 前后端分离架构，API驱动
+- **💻 本地部署**: 完全本地运行，数据安全可控
+- **🚀 一键启动**: 自动检测并安装所有依赖，无需手动配置
 
----
-
-## 🚀 快速部署
-
-### 方法一：一键部署（推荐）
-
-1. **下载项目**
-   - 下载并解压项目源码到本地文件夹
-
-2. **安装Python**（如果未安装）
-   - 下载Python 3.12.7：https://www.python.org/downloads/release/python-3127/
-   - ⚠️ **重要**：安装时请勾选"Add Python to PATH"选项
-
-3. **运行部署脚本**
-   - 双击运行 `一键部署.bat`
-   - 脚本会自动：
-     - 检查Python环境
-     - 创建虚拟环境
-     - 安装所有依赖包
-     - 创建启动脚本
-
-4. **启动系统**
-   - 双击运行生成的 `启动邮件系统.bat`
-   - 系统会自动在浏览器打开：http://localhost:8501
-
-### 方法二：命令行部署
-
-如果一键部署失败，可使用命令行手动部署：
-
-```bash
-# 1. 进入项目目录
-cd Eml_process_platform
-
-# 2. 创建虚拟环境
-python -m venv venv
-
-# 3. 激活虚拟环境
-venv\Scripts\activate
-
-# 4. 安装依赖
-python -m pip install -r requirements.txt
-
-# 5. 启动应用
-python run_app.py
-```
-
-### 配置API Key
-
-复制环境变量示例文件并配置：
-```bash
-# 复制配置文件
-copy env_example.txt .env
-
-# 编辑.env文件，填入您的API Key
-```
-
-**支持的API Key类型**：
-- `GPTBOTS_LLM_API_KEY_1/2/3`: LLM处理专用
-- `GPTBOTS_KB_API_KEY_1/2/3`: 知识库上传专用  
-- `GPTBOTS_QA_API_KEY_1/2/3`: 问答系统专用
-
-> 📋 详细配置说明请参考：[env_example.txt](./env_example.txt)
-
----
-
-## 📚 使用指南
-
-### 步骤1: 邮件上传 📤
-- **功能**: 批量上传EML格式的邮件文件
-- **支持**: 多文件选择、文件验证、进度跟踪
-- **输出**: 原始邮件文件存储到 `eml_process/uploads/`
-
-### 步骤2: 数据清洗 🧹
-- **功能**: 自动提取邮件内容并转换为Markdown格式
-- **处理**: 移除HTML标签、提取纯文本、格式化输出
-- **输出**: 清洗后的Markdown文件存储到 `eml_process/processed/`
-
-### 步骤3: LLM处理 🤖
-- **功能**: 使用GPTBots API进行内容智能处理
-- **特性**: API Key选择、节点配置、批量处理、进度跟踪
-- **输出**: AI优化后的文件存储到 `eml_process/final_output/`
-- **配置**: 支持多个LLM API Key，可选择处理节点
-
-### 步骤4: 结果查看 📊
-- **功能**: 查看各阶段处理结果和统计信息
-- **展示**: 文件列表、内容预览、处理报告
-- **操作**: 文件下载、批量打包
-
-### 步骤5: 知识库管理 📚
-- **功能**: 将处理后的文件上传到GPTBots知识库
-- **特性**: 知识库列表获取、批量上传、进度监控
-- **配置**: 支持多个知识库API Key选择
-- **输出**: 上传结果和知识库管理
-
-### 步骤6: 问答系统 💬
-- **功能**: 基于知识库的智能问答界面
-- **模式**: 
-  - 🤖 直接问答：iframe嵌入式问答界面
-  - 💬 交互式问答：基于API的问答功能
-  - 🖼️ iframe代码：生成嵌入代码
-  - 🔧 API测试：连接和功能测试
-- **特性**: 语音输入、多轮对话、上下文理解
-
----
-
-## 🔧 技术架构
-
-### 核心技术栈
-- **前端框架**: Streamlit
-- **后端语言**: Python 3.12+
-- **API服务**: GPTBots API
-- **文件处理**: Python标准库 + 自定义模块
-
-### 项目结构
-```
-📁 项目根目录/
-├── 📄 一键部署.bat              # 自动部署脚本
-├── 📄 app.py                    # 主应用入口
-├── 📄 run_app.py                # 启动脚本
-├── 📄 requirements.txt          # 依赖列表
-├── 📄 env_example.txt           # 环境变量示例
-├── 📁 config/                   # 配置模块
-├── 📁 tools/                    # 功能模块
-├── 📁 docs/                     # 文档目录
-├── 📁 eml_process/              # 数据处理目录
-└── 📁 logs/                     # 日志目录
-```
-
----
-
-## 🔍 故障排除
-
-### 常见问题
-
-1. **Python未安装或版本不对**
-   - 下载安装Python 3.12.7：https://www.python.org/downloads/release/python-3127/
-   - 安装时务必勾选"Add Python to PATH"
-
-2. **一键部署失败**
-   - 检查是否以管理员身份运行
-   - 尝试使用命令行手动部署
-   - 查看生成的 `deploy.log` 日志文件
-
-3. **依赖安装失败**
-   - 检查网络连接
-   - 尝试使用国内镜像：
-     ```bash
-     python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
-     ```
-
-4. **API Key无效**
-   - 确认Key格式正确
-   - 检查API Key权限和额度
-
-5. **端口占用**
-   - 关闭其他使用8501端口的程序
-   - 或修改`run_app.py`中的端口设置
-
-### 管理脚本
-
-部署完成后会自动生成以下管理脚本：
-- `启动邮件系统.bat` - 启动应用
-- `更新依赖.bat` - 更新依赖包
-- `卸载系统.bat` - 清理环境
-
-### 日志系统
-- **部署日志**: `deploy.log` - 部署过程记录
-- **活动日志**: `logs/activity.log` - 用户操作记录
-- **API日志**: `logs/gptbots_api.log` - API调用记录
-
----
-
-## 🛡️ 安全说明
-
-### 数据安全
-- 所有邮件数据仅在本地处理
-- API Key通过环境变量安全存储
-- 敏感信息脱敏显示
-- 处理日志不包含敏感内容
+## 🚀 快速开始
 
 ### 系统要求
-- **操作系统**: Windows 10/11
-- **Python版本**: 3.12+ (推荐3.12.7)
-- **内存**: 至少4GB RAM
-- **磁盘空间**: 至少2GB可用空间
 
----
+**最低要求：**
+- **Python**: 3.8+ （必须已安装）
+- **内存**: 至少4GB RAM
+- **硬盘**: 至少2GB可用空间
+
+**自动安装：**
+- Node.js 20 LTS（脚本会自动下载安装）
+- npm（随Node.js自动安装）
+- 所有Python和前端依赖（脚本会自动安装）
+
+### 📥 部署步骤
+
+1. **下载项目到桌面**
+   - 将整个 `Eml_process_platform` 文件夹放到桌面
+
+2. **配置API密钥**
+   - 打开 `Eml_process_platform/.env` 文件
+   - 填入您的GPTBots API Keys
+
+3. **一键启动**
+
+#### 🪟 Windows系统
+双击桌面上的 `启动邮件处理系统.vbs` 
+
+或进入项目文件夹，双击 `start.bat`
+
+#### 🍎 macOS/Linux系统
+双击桌面上的 `启动邮件处理系统.command`
+
+或进入项目文件夹，运行：
+```bash
+./start.sh
+```
+
+**首次启动说明：**
+- 脚本会自动检测环境
+- 如果没有Node.js，会自动下载安装
+- 会自动安装所有依赖包
+- 首次启动可能需要5-10分钟
+- 完成后会自动打开浏览器
+
+### 🛑 停止服务
+
+#### Windows系统
+双击桌面上的 `停止邮件处理系统.vbs`
+
+#### macOS/Linux系统
+双击桌面上的 `停止邮件处理系统.command`
+
+### 访问系统
+
+启动后自动打开: `http://localhost:3000`
+
+- **主页**: QA问答系统（无需登录）
+- **管理后台**: 点击右上角"邮件处理管理"
+  - 默认账号: `admin`
+  - 默认密码: `admin123`
+
+## 📚 功能模块
+
+### 公开访问（无需登录）
+- **QA问答系统**: 主页面直接展示，支持知识库问答
+
+### 管理员功能（需要登录）
+1. **邮件上传**: 拖拽上传EML文件，批量处理
+2. **数据清洗**: 自动提取和格式化邮件内容
+3. **LLM处理**: AI智能内容优化和结构化
+4. **结果查看**: 查看处理结果，下载文件
+5. **知识库管理**: 上传到知识库，配置分块参数
+
+## ⚙️ 配置说明
+
+### API Key配置
+
+在项目根目录创建 `.env` 文件：
+
+```bash
+# LLM处理API Keys
+GPTBOTS_LLM_API_KEY_1=app-YOUR_LLM_API_KEY_1
+
+# 知识库上传API Keys  
+GPTBOTS_KB_API_KEY_1=app-YOUR_KB_API_KEY_1
+
+# 问答系统API Keys
+GPTBOTS_QA_API_KEY_1=app-YOUR_QA_API_KEY_1
+```
+
+### 修改iframe URL
+
+编辑 `frontend/pages/index.tsx`，修改问答系统的iframe地址：
+```typescript
+<iframe src="YOUR_IFRAME_URL_HERE" />
+```
+
+## 📁 项目结构
+
+```
+Eml_process_platform/
+├── frontend/                 # React前端应用
+│   ├── components/          # 功能组件
+│   ├── pages/               # 页面
+│   │   ├── index.tsx        # 主页（QA系统）
+│   │   ├── login.tsx        # 登录页
+│   │   └── admin.tsx        # 管理后台
+│   ├── lib/                 # 工具库
+│   │   └── mockDb.ts        # Mock数据库
+│   └── styles/              # 样式文件
+│
+├── api_server.py            # Flask API服务器
+├── tools/                   # Python工具模块
+├── config/                  # 配置模块
+├── requirements.txt         # 后端依赖
+├── start.sh / start.bat     # 启动脚本
+└── README.md               # 本文档
+```
+
+## 🔧 开发指南
+
+### 前端开发
+```bash
+cd frontend
+npm run dev       # 开发模式 (http://localhost:3000)
+npm run build     # 生产构建
+npm run start     # 生产运行
+```
+
+### 后端开发
+```bash
+python api_server.py  # API服务 (http://localhost:5000)
+```
+
+## 🐛 故障排除
+
+### 端口占用
+- 修改前端端口: `frontend/package.json` 中的 `dev` 脚本
+- 修改后端端口: `api_server.py` 中的端口号
+
+### 依赖安装失败
+```bash
+# 使用国内镜像
+pip install -r requirements_api.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
+npm install --registry=https://registry.npmmirror.com
+```
+
+## 📝 更新日志
+
+### v2.0.0 (2025-10-16)
+- ✨ 全新React + Next.js前端界面
+- 💬 主页直接展示QA问答系统（iframe）
+- 🔐 添加管理员登录系统
+- 🚀 Flask API后端
+- 📱 现代化响应式设计
+
+## 📄 许可证
+
+本项目仅用于内部使用。

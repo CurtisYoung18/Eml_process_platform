@@ -27,19 +27,25 @@ logging.basicConfig(
 )
 
 class KnowledgeBaseAPI:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str = None):
         """
         初始化GPTBots知识库API客户端
         
         Args:
             api_key: API密钥
+            base_url: API基础URL（可选，默认从环境变量读取）
         """
         self.api_key = api_key
         self.logger = logging.getLogger(__name__)
         
-        # 根据endpoint设置基础URL
-        # 使用新的内网IP地址
-        self.base_url = "http://10.52.20.41:19080"
+        # 从环境变量读取API URL，如果没有则使用默认值
+        if base_url:
+            self.base_url = base_url
+        else:
+            # 尝试从环境变量读取
+            import os
+            self.base_url = os.getenv("KNOWLEDGE_BASE_API_URL", "https://api-sg.gptbots.ai")
+            logging.info(f"知识库API URL: {self.base_url}")
         
         # API端点URLs
         self.knowledge_base_list_url = f"{self.base_url}/v1/bot/knowledge/base/page"
@@ -55,6 +61,7 @@ class KnowledgeBaseAPI:
         self.retry_embedding_url = f"{self.base_url}/v1/bot/data/retry/batch"
         
         self.session = requests.Session()
+        self.timeout = 10  # 10秒超时
         
     def _get_headers(self) -> Dict[str, str]:
         """获取标准请求头"""
@@ -76,6 +83,10 @@ class KnowledgeBaseAPI:
             响应数据或None
         """
         try:
+            # 如果没有指定timeout，使用默认值
+            if 'timeout' not in kwargs:
+                kwargs['timeout'] = self.timeout
+            
             response = self.session.request(method, url, **kwargs)
             
             if response.status_code == 200:
@@ -102,6 +113,62 @@ class KnowledgeBaseAPI:
             self.knowledge_base_list_url,
             headers=self._get_headers()
         )
+    
+    def list_knowledge_bases(self) -> Optional[List[Dict]]:
+        """
+        获取格式化的知识库列表，用于前端显示
+        
+        Returns:
+            格式化的知识库列表 [{'id': '', 'name': ''}] 或 None
+        """
+        try:
+            result = self.get_knowledge_bases()
+            
+            logging.info(f"知识库API响应: {result}")
+            
+            if not result:
+                logging.error("知识库API返回空结果")
+                return None
+                
+            if 'error' in result:
+                logging.error(f"知识库API返回错误: {result.get('error')}, {result.get('message')}")
+                return None
+            
+            # 尝试多种数据结构格式
+            data_list = None
+            
+            # 格式1: {'knowledge_base': [...]} (实际API返回格式)
+            if 'knowledge_base' in result and isinstance(result['knowledge_base'], list):
+                data_list = result['knowledge_base']
+            # 格式2: {'data': [...]}
+            elif 'data' in result and isinstance(result['data'], list):
+                data_list = result['data']
+            # 格式3: {'data': {'list': [...]}}
+            elif 'data' in result and isinstance(result['data'], dict) and 'list' in result['data']:
+                data_list = result['data']['list']
+            # 格式4: 直接是列表
+            elif isinstance(result, list):
+                data_list = result
+            
+            if data_list:
+                knowledge_bases = []
+                for kb in data_list:
+                    knowledge_bases.append({
+                        'id': kb.get('id', ''),
+                        'name': kb.get('name', '未命名知识库'),
+                        'doc_count': kb.get('doc', kb.get('doc_count', 0)),  # 'doc' 是实际字段名
+                        'created_at': kb.get('created_at', ''),
+                        'desc': kb.get('desc', '')
+                    })
+                logging.info(f"成功解析 {len(knowledge_bases)} 个知识库")
+                return knowledge_bases
+            
+            logging.error(f"无法从响应中提取知识库列表，响应结构: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+            return None
+            
+        except Exception as e:
+            logging.error(f"list_knowledge_bases异常: {str(e)}")
+            return None
     
     def get_documents(self, knowledge_base_id: str, page: int = 1, page_size: int = 10) -> Optional[Dict]:
         """
@@ -131,15 +198,17 @@ class KnowledgeBaseAPI:
         )
     
     def add_text_documents(self, files: List[Dict], knowledge_base_id: str = None, 
-                          chunk_token: int = 600, splitter: str = None) -> Optional[Dict]:
+                          chunk_token: int = None, chunk_separator: str = None, 
+                          splitter: str = None) -> Optional[Dict]:
         """
         添加文本类文档
         
         Args:
             files: 文档文件列表
             knowledge_base_id: 目标知识库ID（可选）
-            chunk_token: 分块Token数（默认600）
-            splitter: 分隔符（可选）
+            chunk_token: 分块Token数（与chunk_separator二选一）
+            chunk_separator: 自定义分隔符（与chunk_token二选一）
+            splitter: 分隔符类型（可选）
             
         Returns:
             上传结果或None
@@ -154,11 +223,17 @@ class KnowledgeBaseAPI:
         if knowledge_base_id:
             payload["knowledge_base_id"] = knowledge_base_id
         
-        # 分块参数（二选一）
+        # 分块参数
         if splitter:
             payload["splitter"] = splitter
-        else:
+        
+        # 分块大小或分隔符（二选一）
+        if chunk_token:
             payload["chunk_token"] = chunk_token
+        elif chunk_separator:
+            payload["chunk_separator"] = chunk_separator
+        else:
+            payload["chunk_token"] = 600  # 默认值
         
         return self._make_request(
             "POST",
@@ -363,7 +438,8 @@ class KnowledgeBaseAPI:
     
     def upload_markdown_files_from_directory(self, directory_path: str, 
                                            knowledge_base_id: str = None,
-                                           chunk_token: int = 600,
+                                           chunk_token: int = None,
+                                           chunk_separator: str = None,
                                            splitter: str = None,
                                            batch_size: int = 20) -> Dict:
         """
@@ -372,8 +448,9 @@ class KnowledgeBaseAPI:
         Args:
             directory_path: 包含Markdown文件的目录路径
             knowledge_base_id: 目标知识库ID
-            chunk_token: 分块Token数
-            splitter: 分隔符
+            chunk_token: 分块Token数（与chunk_separator二选一）
+            chunk_separator: 自定义分隔符（与chunk_token二选一）
+            splitter: 分隔符类型
             batch_size: 批处理大小（最多20个）
             
         Returns:
@@ -400,11 +477,14 @@ class KnowledgeBaseAPI:
         }
         
         # 分批处理文件
+        total_batches = (len(md_files) + batch_size - 1) // batch_size
+        logging.info(f"总共 {len(md_files)} 个文件，将分 {total_batches} 批处理，每批最多 {batch_size} 个")
+        
         for i in range(0, len(md_files), batch_size):
             batch_files = md_files[i:i + batch_size]
             batch_num = i // batch_size + 1
             
-            logging.info(f"处理批次 {batch_num}: {len(batch_files)} 个文件")
+            logging.info(f"处理批次 {batch_num}/{total_batches}: {len(batch_files)} 个文件")
             
             # 准备文件数据
             files_data = []
@@ -437,12 +517,22 @@ class KnowledgeBaseAPI:
             
             # 调用API上传
             try:
-                upload_result = self.add_text_documents(
-                    files=files_data,
-                    knowledge_base_id=knowledge_base_id,
-                    chunk_token=chunk_token,
-                    splitter=splitter
-                )
+                # 构建上传参数
+                upload_params = {
+                    'files': files_data,
+                    'knowledge_base_id': knowledge_base_id,
+                    'splitter': splitter
+                }
+                
+                # 根据分块模式选择参数
+                if chunk_token:
+                    upload_params['chunk_token'] = chunk_token
+                elif chunk_separator:
+                    upload_params['chunk_separator'] = chunk_separator
+                else:
+                    upload_params['chunk_token'] = 600  # 默认值
+                
+                upload_result = self.add_text_documents(**upload_params)
                 
                 if upload_result and "doc" in upload_result:
                     # 上传成功
