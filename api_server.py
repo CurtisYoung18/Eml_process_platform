@@ -809,8 +809,11 @@ def auto_upload_kb():
 
 if __name__ == '__main__':
     import time
-    print("🚀 启动邮件处理API服务器...")
-    print("📍 服务地址: http://localhost:5001")
-    print("💡 前端地址: http://localhost:3000")
+    print("=" * 60)
+    print("Email Processing API Server - Starting...")
+    print("=" * 60)
+    print("Server Address: http://localhost:5001")
+    print("Frontend Address: http://localhost:3000")
+    print("=" * 60)
     app.run(host='0.0.0.0', port=5001, debug=True)
 

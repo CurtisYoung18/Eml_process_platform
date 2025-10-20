@@ -3,7 +3,7 @@
 # ================================================================
 # 邮件知识库处理系统 - 一键启动脚本 (macOS/Linux)
 # ================================================================
-# 功能：自动检测并安装所有必需的环境和依赖
+# 功能：检查环境并启动服务
 # 使用：chmod +x start.sh && ./start.sh
 # ================================================================
 
@@ -46,18 +46,9 @@ OS_TYPE="$(uname -s)"
 case "${OS_TYPE}" in
     Linux*)     
         OS="Linux"
-        PACKAGE_MANAGER=""
-        if command -v apt-get &> /dev/null; then
-            PACKAGE_MANAGER="apt-get"
-        elif command -v yum &> /dev/null; then
-            PACKAGE_MANAGER="yum"
-        elif command -v brew &> /dev/null; then
-            PACKAGE_MANAGER="brew"
-        fi
         ;;
     Darwin*)    
         OS="macOS"
-        PACKAGE_MANAGER="brew"
         ;;
     *)          
         OS="Unknown"
@@ -66,86 +57,47 @@ esac
 log_success "操作系统: $OS"
 
 # ================================================================
-# 2. 检查并安装 Homebrew (仅macOS)
-# ================================================================
-if [ "$OS" = "macOS" ]; then
-    if ! command -v brew &> /dev/null; then
-        log_warning "未检测到 Homebrew，正在安装..."
-        log_info "这可能需要几分钟时间，请耐心等待..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        
-        # 配置环境变量
-        if [ -f "/opt/homebrew/bin/brew" ]; then
-            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-        fi
-        
-        log_success "Homebrew 安装完成！"
-    else
-        log_success "Homebrew 已安装"
-    fi
-fi
-
-# ================================================================
-# 3. 检查并安装 Python3
+# 2. 检查 Python3
 # ================================================================
 log_info "检查 Python 环境..."
 if ! command -v python3 &> /dev/null; then
-    log_warning "未检测到 Python3，正在安装..."
-    
+    log_error "未检测到 Python3！"
+    echo ""
+    echo "请手动安装 Python："
     if [ "$OS" = "macOS" ]; then
-        brew install python@3.12
-    elif [ "$PACKAGE_MANAGER" = "apt-get" ]; then
-        sudo apt-get update
-        sudo apt-get install -y python3 python3-pip python3-venv
-    elif [ "$PACKAGE_MANAGER" = "yum" ]; then
-        sudo yum install -y python3 python3-pip
-    else
-        log_error "无法自动安装 Python，请手动安装 Python 3.12+"
-        exit 1
+        echo "  方法1: 访问 https://www.python.org/downloads/ 下载安装"
+        echo "  方法2: 使用 Homebrew: brew install python@3.12"
+    elif [ "$OS" = "Linux" ]; then
+        echo "  Ubuntu/Debian: sudo apt-get install python3 python3-pip python3-venv"
+        echo "  CentOS/RHEL: sudo yum install python3 python3-pip"
     fi
-    
-    log_success "Python3 安装完成！"
+    echo ""
+    echo "安装完成后，请重新运行此脚本"
+    exit 1
 else
     PYTHON_VERSION=$(python3 --version)
     log_success "Python 已安装: $PYTHON_VERSION"
 fi
 
 # ================================================================
-# 4. 检查并安装 Node.js 和 npm
+# 3. 检查 Node.js 和 npm
 # ================================================================
 log_info "检查 Node.js 环境..."
-NODE_REQUIRED=true
 
 if ! command -v node &> /dev/null; then
-    log_warning "未检测到 Node.js，正在安装 Node.js 20 LTS..."
-    
+    log_error "未检测到 Node.js！"
+    echo ""
+    echo "请手动安装 Node.js 20 LTS："
     if [ "$OS" = "macOS" ]; then
-        # macOS 使用 Homebrew 安装
-        brew install node@20
-        
-        # 添加到 PATH
-        if [ -d "/opt/homebrew/opt/node@20/bin" ]; then
-            export PATH="/opt/homebrew/opt/node@20/bin:$PATH"
-        fi
+        echo "  方法1: 访问 https://nodejs.org/ 下载安装"
+        echo "  方法2: 使用 Homebrew: brew install node@20"
     elif [ "$OS" = "Linux" ]; then
-        # Linux 使用 NodeSource 安装
-        log_info "正在配置 NodeSource 仓库..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-        
-        if [ "$PACKAGE_MANAGER" = "apt-get" ]; then
-            sudo apt-get install -y nodejs
-        elif [ "$PACKAGE_MANAGER" = "yum" ]; then
-            sudo yum install -y nodejs
-        fi
-    else
-        log_error "无法自动安装 Node.js"
-        log_info "请访问 https://nodejs.org/ 手动下载安装 Node.js 20 LTS"
-        log_info "安装完成后，请重新运行此脚本"
-        exit 1
+        echo "  访问 https://nodejs.org/ 下载安装"
+        echo "  或参考: https://github.com/nodesource/distributions"
     fi
-    
-    log_success "Node.js 安装完成！"
+    echo ""
+    echo "安装完成后，请重新运行此脚本"
+    exit 1
 else
     NODE_VERSION=$(node --version)
     NPM_VERSION=$(npm --version)
@@ -155,17 +107,23 @@ fi
 
 # 验证 Node.js 和 npm
 if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
-    log_error "Node.js 或 npm 安装失败，请检查安装过程"
+    log_error "Node.js 或 npm 未正确安装，请检查安装"
     exit 1
 fi
 
 # ================================================================
-# 5. 创建并激活 Python 虚拟环境
+# 4. 创建并激活 Python 虚拟环境
 # ================================================================
 log_info "配置 Python 虚拟环境..."
 if [ ! -d "venv" ]; then
     log_info "创建 Python 虚拟环境..."
     python3 -m venv venv
+    if [ $? -ne 0 ]; then
+        log_error "创建虚拟环境失败！"
+        echo ""
+        echo "请确保 Python 已正确安装，并且包含 venv 模块"
+        exit 1
+    fi
     log_success "虚拟环境创建完成"
 else
     log_success "虚拟环境已存在"
@@ -173,18 +131,35 @@ fi
 
 # 激活虚拟环境
 source venv/bin/activate
+if [ $? -ne 0 ]; then
+    log_error "激活虚拟环境失败！"
+    exit 1
+fi
 log_success "虚拟环境已激活"
 
 # ================================================================
-# 6. 安装 Python 依赖
+# 5. 安装 Python 依赖
 # ================================================================
 log_info "安装 Python 依赖..."
 pip install --upgrade pip -q
+if [ $? -ne 0 ]; then
+    log_warning "升级 pip 失败，继续..."
+fi
+
 pip install -r requirements.txt -q
+if [ $? -ne 0 ]; then
+    log_error "安装 Python 依赖失败！"
+    echo ""
+    echo "请尝试手动安装："
+    echo "  1. source venv/bin/activate"
+    echo "  2. pip install -r requirements.txt"
+    echo ""
+    exit 1
+fi
 log_success "Python 依赖安装完成"
 
 # ================================================================
-# 7. 检查并创建 .env 文件
+# 6. 检查并创建 .env 文件
 # ================================================================
 if [ ! -f ".env" ]; then
     if [ -f "env_example.txt" ]; then
@@ -200,7 +175,7 @@ else
 fi
 
 # ================================================================
-# 8. 安装前端依赖
+# 7. 安装前端依赖
 # ================================================================
 log_info "安装前端依赖..."
 cd frontend
@@ -208,17 +183,31 @@ cd frontend
 if [ ! -d "node_modules" ]; then
     log_info "首次安装，这可能需要几分钟..."
     npm install
+    if [ $? -ne 0 ]; then
+        log_error "前端依赖安装失败！"
+        echo ""
+        echo "请尝试手动安装："
+        echo "  1. cd frontend"
+        echo "  2. npm install"
+        echo ""
+        cd ..
+        exit 1
+    fi
     log_success "前端依赖安装完成"
 else
     log_info "检查依赖更新..."
     npm install
-    log_success "前端依赖已是最新"
+    if [ $? -ne 0 ]; then
+        log_warning "更新依赖失败，使用现有依赖..."
+    else
+        log_success "前端依赖已是最新"
+    fi
 fi
 
 cd ..
 
 # ================================================================
-# 9. 创建日志目录
+# 8. 创建日志目录
 # ================================================================
 if [ ! -d "logs" ]; then
     mkdir -p logs
@@ -226,7 +215,7 @@ if [ ! -d "logs" ]; then
 fi
 
 # ================================================================
-# 10. 启动后端 API 服务器
+# 9. 启动后端 API 服务器
 # ================================================================
 echo ""
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -254,7 +243,7 @@ else
 fi
 
 # ================================================================
-# 11. 启动前端开发服务器
+# 10. 启动前端开发服务器
 # ================================================================
 echo ""
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -284,7 +273,7 @@ else
 fi
 
 # ================================================================
-# 12. 启动成功提示
+# 11. 启动成功提示
 # ================================================================
 echo ""
 echo "════════════════════════════════════════════════════════════"

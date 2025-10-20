@@ -1,66 +1,66 @@
 @echo off
 chcp 65001 >nul
+setlocal enabledelayedexpansion
 
 REM ================================================================
-REM 邮件知识库处理系统 - 停止脚本 (Windows)
+REM Email Knowledge Base Processing System - Stop Script (Windows)
 REM ================================================================
 
-echo ════════════════════════════════════════════════════════════
-echo         📧 邮件知识库处理系统 - 停止服务
-echo ════════════════════════════════════════════════════════════
+echo ================================================================
+echo         Email Knowledge Base Processing System - Stop Services
+echo ================================================================
 echo.
 
-echo [INFO] 正在停止所有服务...
+echo [INFO] Stopping all services...
 echo.
 
-REM 停止后端 API 服务器
-echo [INFO] 停止后端 API 服务器...
-taskkill /FI "WINDOWTITLE eq 邮件处理API服务器*" /T /F >nul 2>&1
+REM Stop Backend API Server
+echo [INFO] Stopping backend API server...
+taskkill /FI "WINDOWTITLE eq Email Processing API Server*" /T /F >nul 2>&1
 if %errorlevel% equ 0 (
-    echo [SUCCESS] ✅ 后端服务已停止
+    echo [SUCCESS] Backend service stopped
 ) else (
-    echo [WARNING] ⚠️  后端服务未运行或已停止
+    echo [WARNING] Backend service not running or already stopped
 )
 
-REM 停止前端开发服务器
-echo [INFO] 停止前端开发服务器...
-taskkill /FI "WINDOWTITLE eq 前端开发服务器*" /T /F >nul 2>&1
+REM Stop Frontend Development Server
+echo [INFO] Stopping frontend development server...
+taskkill /FI "WINDOWTITLE eq Frontend Development Server*" /T /F >nul 2>&1
 if %errorlevel% equ 0 (
-    echo [SUCCESS] ✅ 前端服务已停止
+    echo [SUCCESS] Frontend service stopped
 ) else (
-    echo [WARNING] ⚠️  前端服务未运行或已停止
+    echo [WARNING] Frontend service not running or already stopped
 )
 
-REM 额外清理：停止所有相关进程
+REM Additional cleanup: Stop all related processes
 echo.
-echo [INFO] 清理残留进程...
+echo [INFO] Cleaning up remaining processes...
 
-REM 停止所有 Python api_server 进程
+REM Stop all Python api_server processes
 for /f "tokens=2" %%i in ('tasklist /FI "IMAGENAME eq python.exe" /FO LIST ^| findstr /C:"PID:"') do (
     wmic process where "ProcessId=%%i" get CommandLine 2>nul | findstr /C:"api_server.py" >nul
     if !errorlevel! equ 0 (
         taskkill /PID %%i /F >nul 2>&1
-        echo [SUCCESS] ✅ 清理了 api_server.py 进程 (PID: %%i)
+        echo [SUCCESS] Cleaned up api_server.py process (PID: %%i)
     )
 )
 
-REM 停止所有 Node.js 进程（前端）
+REM Stop all Node.js processes (frontend)
 for /f "tokens=2" %%i in ('tasklist /FI "IMAGENAME eq node.exe" /FO LIST ^| findstr /C:"PID:"') do (
     wmic process where "ProcessId=%%i" get CommandLine 2>nul | findstr /C:"next" >nul
     if !errorlevel! equ 0 (
         taskkill /PID %%i /F /T >nul 2>&1
-        echo [SUCCESS] ✅ 清理了 next-server 进程 (PID: %%i)
+        echo [SUCCESS] Cleaned up next-server process (PID: %%i)
     )
 )
 
-REM 清理 PID 文件
+REM Clean up PID files
 if exist "logs\api_server.pid" del /q logs\api_server.pid
 if exist "logs\frontend.pid" del /q logs\frontend.pid
 
 echo.
-echo ════════════════════════════════════════════════════════════
-echo ✅ 所有服务已停止
-echo ════════════════════════════════════════════════════════════
+echo ================================================================
+echo All services stopped
+echo ================================================================
 echo.
 pause
-

@@ -50,7 +50,7 @@ class EmailCleaner:
                     result += str(part)
             return result.strip()
         except Exception as e:
-            print(f"⚠️ 头部解码失败: {e}")
+            print(f"[WARNING] Header decode failed: {e}")
             return str(header_value)
     
     def extract_email_content(self, msg) -> str:
@@ -70,7 +70,7 @@ class EmailCleaner:
                             charset = part.get_content_charset() or 'utf-8'
                             content += payload.decode(charset, errors='ignore') + "\n"
                     except Exception as e:
-                        print(f"⚠️ 内容解码失败: {e}")
+                        print(f"[WARNING] Content decode failed: {e}")
                         
                 elif content_type == "text/html" and "attachment" not in content_disposition and not content:
                     # 如果没有纯文本，尝试HTML（简单处理）
@@ -83,7 +83,7 @@ class EmailCleaner:
                             clean_content = re.sub(r'<[^>]+>', '', html_content)
                             content += clean_content + "\n"
                     except Exception as e:
-                        print(f"⚠️ HTML内容解码失败: {e}")
+                        print(f"[WARNING] HTML content decode failed: {e}")
         else:
             # 非多部分邮件
             try:
@@ -92,7 +92,7 @@ class EmailCleaner:
                     charset = msg.get_content_charset() or 'utf-8'
                     content = payload.decode(charset, errors='ignore')
             except Exception as e:
-                print(f"⚠️ 邮件内容解码失败: {e}")
+                print(f"[WARNING] Email content decode failed: {e}")
         
         return content.strip()
     
@@ -209,12 +209,12 @@ class EmailCleaner:
                     container_email['contained_files'] = []
                 container_email['contained_files'].append(email_info['filename'])
                 
-                print(f"🔍 发现100%包含: {email_info['filename']} 被 {container_email['filename']} 包含")
+                print(f"[DUPLICATE] Found 100% duplicate: {email_info['filename']} contained in {container_email['filename']}")
                 
             else:
                 # 不是重复邮件，添加到唯一列表
                 unique_emails.append(email_info)
-                print(f"✅ 独特邮件: {email_info['filename']} (长度: {len(current_content)})")
+                print(f"[UNIQUE] Unique email: {email_info['filename']} (length: {len(current_content)})")
         
         return unique_emails, duplicates
     
@@ -227,7 +227,7 @@ class EmailCleaner:
         md_content.append("")
         
         # 基本信息
-        md_content.append("## 📧 邮件信息")
+        md_content.append("## Email Information")
         md_content.append("")
         md_content.append(f"- **源文件名**: `{email_info['filename']}`")
         md_content.append(f"- **发件人**: {email_info['from']}")
@@ -243,7 +243,7 @@ class EmailCleaner:
         if 'contained_files' in email_info:
             md_content.append(f"- **包含的其他邮件**: {len(email_info['contained_files'])} 封")
             md_content.append("")
-            md_content.append("### 📋 包含的源文件列表")
+            md_content.append("### Source Files List")
             md_content.append("")
             for contained_file in email_info['contained_files']:
                 md_content.append(f"- `{contained_file}`")
@@ -292,7 +292,7 @@ class EmailCleaner:
     
     def process_all_emails(self) -> Dict:
         """处理所有邮件文件"""
-        print(f"🔍 扫描目录: {self.input_dir}")
+        print(f"[SCAN] Scanning directory: {self.input_dir}")
         
         # 获取所有EML文件
         eml_files = list(self.input_dir.glob("*.eml"))
@@ -301,14 +301,14 @@ class EmailCleaner:
             print(f"❌ 未在 {self.input_dir} 中找到EML文件")
             return {"success": False, "message": "未找到EML文件"}
         
-        print(f"📧 发现 {len(eml_files)} 个EML文件")
+        print(f"[FOUND] Found {len(eml_files)} EML files")
         
         # 解析所有邮件
         emails = []
         failed_files = []
         
         for eml_file in eml_files:
-            print(f"📖 解析: {eml_file.name}")
+            print(f"[PARSE] Parsing: {eml_file.name}")
             email_info = self.parse_eml_file(eml_file)
             
             if email_info:
@@ -319,24 +319,24 @@ class EmailCleaner:
         if not emails:
             return {"success": False, "message": "所有邮件解析失败"}
         
-        print(f"✅ 成功解析 {len(emails)} 个邮件")
+        print(f"[SUCCESS] Successfully parsed {len(emails)} emails")
         
         # 去重处理
-        print("🔄 开始去重处理...")
+        print("[DEDUP] Starting deduplication...")
         unique_emails, duplicates = self.find_duplicates(emails)
         
-        print(f"📊 去重结果: {len(emails)} -> {len(unique_emails)} 封邮件")
-        print(f"🗑️ 重复邮件: {len(duplicates)} 封")
+        print(f"[RESULT] Deduplication result: {len(emails)} -> {len(unique_emails)} emails")
+        print(f"[DUPLICATE] Duplicate emails: {len(duplicates)}")
         
         # 生成Markdown文件
-        print("📝 生成Markdown文件...")
+        print("[GENERATE] Generating Markdown files...")
         generated_files = []
         
         for email_info in unique_emails:
             md_path = self.save_markdown_file(email_info)
             if md_path:
                 generated_files.append(md_path)
-                print(f"✅ 生成: {Path(md_path).name}")
+                print(f"[SUCCESS] Generated: {Path(md_path).name}")
         
         # 保存处理报告
         report = {
@@ -358,8 +358,8 @@ class EmailCleaner:
         with open(report_path, 'w', encoding='utf-8') as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
         
-        print(f"\n📋 处理报告已保存: {report_path}")
-        print(f"📊 压缩率: {report['compression_ratio']}")
+        print(f"\n[REPORT] Processing report saved: {report_path}")
+        print(f"[STATS] Compression ratio: {report['compression_ratio']}")
         
         return {
             "success": True,
@@ -369,7 +369,9 @@ class EmailCleaner:
 
 def main():
     """主函数 - 命令行使用"""
-    print("🚀 邮件清洗脚本启动")
+    print("=" * 60)
+    print("Email Cleaner Script - Starting...")
+    print("=" * 60)
     print("=" * 50)
     
     # 创建清洗器实例

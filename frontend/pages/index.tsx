@@ -64,13 +64,14 @@ export default function HomePage() {
           </div>
         )}
         <iframe
-          src="https://www.gptbots.ai/widget/eesy0snwfrcoqgiib8x0nlm/chat.html"
+          src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
           className={`qa-iframe ${iframeLoaded ? 'loaded' : ''}`}
           onLoad={() => setIframeLoaded(true)}
           title="知识库问答"
-          allow="microphone"
+          allow="microphone *"
         />
       </div>
+
 
       <style jsx>{`
         .qa-main-page {
