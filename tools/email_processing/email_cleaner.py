@@ -16,17 +16,19 @@ from datetime import datetime
 import hashlib
 
 class EmailCleaner:
-    def __init__(self, input_dir: str = "Eml", output_dir: str = "eml_process/processed"):
+    def __init__(self, input_dir: str = "Eml", output_dir: str = "eml_process/processed", batch_mode: bool = True):
         """
         初始化邮件清洗器
         
         Args:
             input_dir: 输入EML文件目录
             output_dir: 输出Markdown文件目录
+            batch_mode: 是否使用批次模式（自动检测批次文件夹）
         """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.batch_mode = batch_mode
         
         # 存储处理过的邮件信息
         self.processed_emails = []
@@ -271,12 +273,19 @@ class EmailCleaner:
         
         return '\n'.join(md_content)
     
-    def save_markdown_file(self, email_info: Dict) -> str:
+    def save_markdown_file(self, email_info: Dict, batch_id: Optional[str] = None) -> str:
         """保存Markdown文件"""
         # 生成文件名（去除.eml扩展名，添加.md）
         base_name = email_info['filename'].replace('.eml', '')
         md_filename = f"{base_name}.md"
-        md_path = self.output_dir / md_filename
+        
+        # 如果有批次ID，创建批次子目录
+        if batch_id:
+            batch_output_dir = self.output_dir / batch_id
+            batch_output_dir.mkdir(parents=True, exist_ok=True)
+            md_path = batch_output_dir / md_filename
+        else:
+            md_path = self.output_dir / md_filename
         
         # 生成Markdown内容
         md_content = self.generate_markdown(email_info)
@@ -287,18 +296,168 @@ class EmailCleaner:
                 f.write(md_content)
             return str(md_path)
         except Exception as e:
-            print(f"❌ 保存Markdown文件失败 {md_filename}: {e}")
+            print(f"[ERROR] Failed to save Markdown file {md_filename}: {e}")
             return ""
     
-    def process_all_emails(self) -> Dict:
-        """处理所有邮件文件"""
+    def process_batch(self, batch_dir: Path, batch_id: str) -> Dict:
+        """处理单个批次"""
+        print(f"[INFO] Processing batch: {batch_id}")
+        
+        # 读取批次元数据
+        batch_info_file = batch_dir / ".batch_info.json"
+        batch_info = None
+        
+        if batch_info_file.exists():
+            with open(batch_info_file, 'r', encoding='utf-8') as f:
+                batch_info = json.load(f)
+            
+            # 检查是否已处理
+            if batch_info.get('status', {}).get('cleaned', False):
+                print(f"[INFO] Batch {batch_id} already cleaned, skipping...")
+                return {
+                    "success": True,
+                    "batch_id": batch_id,
+                    "skipped": True,
+                    "message": "批次已处理"
+                }
+        
+        # 获取批次中的所有EML文件
+        eml_files = list(batch_dir.glob("*.eml"))
+        
+        if not eml_files:
+            print(f"[WARNING] No EML files found in batch {batch_id}")
+            return {"success": False, "batch_id": batch_id, "message": "未找到EML文件"}
+        
+        print(f"[FOUND] Found {len(eml_files)} EML files in batch {batch_id}")
+        
+        # 解析所有邮件
+        emails = []
+        failed_files = []
+        
+        for eml_file in eml_files:
+            print(f"[PARSE] Parsing: {eml_file.name}")
+            email_info = self.parse_eml_file(eml_file)
+            
+            if email_info:
+                emails.append(email_info)
+            else:
+                failed_files.append(eml_file.name)
+        
+        if not emails:
+            return {"success": False, "batch_id": batch_id, "message": "所有邮件解析失败"}
+        
+        print(f"[SUCCESS] Successfully parsed {len(emails)} emails")
+        
+        # 去重处理（只在批次内去重）
+        print("[DEDUP] Starting deduplication...")
+        unique_emails, duplicates = self.find_duplicates(emails)
+        
+        print(f"[RESULT] Deduplication result: {len(emails)} -> {len(unique_emails)} emails")
+        print(f"[DUPLICATE] Duplicate emails: {len(duplicates)}")
+        
+        # 保存去重后的邮件为Markdown（带批次ID）
+        saved_files = []
+        for email_info in unique_emails:
+            md_path = self.save_markdown_file(email_info, batch_id=batch_id)
+            if md_path:
+                saved_files.append(md_path)
+        
+        # 更新批次元数据
+        if batch_info:
+            batch_info['status']['cleaned'] = True
+            batch_info['processing_history']['cleaned_at'] = datetime.now().isoformat()
+            batch_info['dedup_stats'] = {
+                'total_emails': len(emails),
+                'unique_emails': len(unique_emails),
+                'duplicates': len(duplicates)
+            }
+            
+            with open(batch_info_file, 'w', encoding='utf-8') as f:
+                json.dump(batch_info, f, ensure_ascii=False, indent=2)
+        
+        return {
+            "success": True,
+            "batch_id": batch_id,
+            "total_files": len(eml_files),
+            "parsed_files": len(emails),
+            "unique_files": len(unique_emails),
+            "duplicate_files": len(duplicates),
+            "failed_files": failed_files,
+            "saved_files": saved_files
+        }
+    
+    def process_all_emails(self, selected_batches=None) -> Dict:
+        """处理所有邮件文件 - 支持批次模式
+        
+        Args:
+            selected_batches: 可选，指定要处理的批次ID列表。如果为None，处理所有批次。
+        """
         print(f"[SCAN] Scanning directory: {self.input_dir}")
         
+        # 检查是否使用批次模式
+        if self.batch_mode:
+            # 查找所有批次目录
+            all_batch_dirs = [d for d in self.input_dir.iterdir() if d.is_dir()]
+            
+            if not all_batch_dirs:
+                print(f"[WARNING] No batch directories found in {self.input_dir}")
+                # 降级到非批次模式
+                self.batch_mode = False
+            else:
+                # 如果指定了批次列表，只处理这些批次
+                if selected_batches:
+                    batch_dirs = [d for d in all_batch_dirs if d.name in selected_batches]
+                    print(f"[INFO] Processing {len(batch_dirs)} selected batch(es) out of {len(all_batch_dirs)} total")
+                else:
+                    batch_dirs = all_batch_dirs
+                    print(f"[INFO] Found {len(batch_dirs)} batch(es)")
+                
+                if not batch_dirs:
+                    return {
+                        "success": False,
+                        "message": "未找到指定的批次"
+                    }
+                
+                results = []
+                
+                for batch_dir in sorted(batch_dirs, key=lambda x: x.name):
+                    batch_id = batch_dir.name
+                    result = self.process_batch(batch_dir, batch_id)
+                    results.append(result)
+                
+                # 汇总统计
+                total_unique = sum(r.get('unique_files', 0) for r in results if r.get('success'))
+                total_duplicates = sum(r.get('duplicate_files', 0) for r in results if r.get('success'))
+                total_failed = sum(len(r.get('failed_files', [])) for r in results if r.get('success'))
+                
+                print(f"[STATS] All batches processed:")
+                print(f"  - Total unique emails: {total_unique}")
+                print(f"  - Total duplicates: {total_duplicates}")
+                print(f"  - Total failed: {total_failed}")
+                
+                return {
+                    "success": True,
+                    "mode": "batch",
+                    "batches": results,
+                    "summary": {
+                        "total_batches": len(results),
+                        "total_unique": total_unique,
+                        "total_duplicates": total_duplicates,
+                        "total_failed": total_failed
+                    },
+                    "report": {
+                        "unique_emails": total_unique,
+                        "duplicate_emails": total_duplicates,
+                        "total_input_files": total_unique + total_duplicates
+                    }
+                }
+        
+        # 非批次模式（兼容旧逻辑）
         # 获取所有EML文件
         eml_files = list(self.input_dir.glob("*.eml"))
         
         if not eml_files:
-            print(f"❌ 未在 {self.input_dir} 中找到EML文件")
+            print(f"[ERROR] No EML files found in {self.input_dir}")
             return {"success": False, "message": "未找到EML文件"}
         
         print(f"[FOUND] Found {len(eml_files)} EML files")

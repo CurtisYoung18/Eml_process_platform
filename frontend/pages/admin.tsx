@@ -7,7 +7,8 @@ import {
   HiChartBar, 
   HiDatabase,
   HiLogout,
-  HiChip
+  HiChip,
+  HiFolderOpen
 } from 'react-icons/hi'
 import { checkAuth, logout, getCurrentUser } from '@/lib/mockDb'
 
@@ -15,6 +16,7 @@ import { checkAuth, logout, getCurrentUser } from '@/lib/mockDb'
 import Overview from '@/components/Overview'
 import AutoPipeline from '@/components/AutoPipeline'
 import ResultsView from '@/components/ResultsView'
+import BatchManager from '@/components/BatchManager'
 
 export default function AdminPage() {
   const router = useRouter()
@@ -37,6 +39,7 @@ export default function AdminPage() {
 
   const navItems = [
     { id: 'overview', label: '首页概览', icon: HiHome },
+    { id: 'batches', label: '批次管理', icon: HiFolderOpen },
     { id: 'auto', label: '全自动运行', icon: HiCog },
     { id: 'results', label: '结果查看', icon: HiChartBar },
   ]
@@ -47,6 +50,8 @@ export default function AdminPage() {
         return <Overview onNavigate={setCurrentPage} />
       case 'auto':
         return <AutoPipeline onNavigate={setCurrentPage} />
+      case 'batches':
+        return <BatchManager />
       case 'results':
         return <ResultsView />
       default:

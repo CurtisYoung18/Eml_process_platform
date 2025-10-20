@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { HiCog, HiCheckCircle, HiPlay, HiCloudUpload, HiTrash, HiX } from 'react-icons/hi'
+import { HiCog, HiCheckCircle, HiPlay, HiCloudUpload, HiTrash, HiX, HiFolderOpen, HiClock } from 'react-icons/hi'
 import { BiLoaderAlt } from 'react-icons/bi'
 import axios from 'axios'
 
@@ -8,7 +8,7 @@ interface AutoPipelineProps {
 }
 
 export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
-  const [currentView, setCurrentView] = useState<'upload' | 'config' | 'completed'>('upload')
+  const [currentView, setCurrentView] = useState<'upload' | 'config' | 'completed'>('config')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(0)
   const [currentStep, setCurrentStep] = useState('')
@@ -25,6 +25,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSuccess, setUploadSuccess] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
+  const [batchLabel, setBatchLabel] = useState('')
   
   // 配置参数
   const [config, setConfig] = useState({
@@ -45,11 +46,18 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   // 知识库列表
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([])
   const [loadingKBList, setLoadingKBList] = useState(false)
+  
+  // 批次列表
+  const [batches, setBatches] = useState<any[]>([])
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
+  const [loadingBatches, setLoadingBatches] = useState(false)
+  const [hideCompletedBatches, setHideCompletedBatches] = useState(false)
 
   useEffect(() => {
     fetchUploadedFiles()
     fetchProcessedFiles()
     fetchLlmProcessedFiles()
+    fetchBatches()
     
     // 如果正在运行，确保显示配置页面
     if (running && currentView === 'upload') {
@@ -94,6 +102,20 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       console.error('获取环境配置失败:', error)
     } finally {
       setLoadingConfig(false)
+    }
+  }
+
+  const fetchBatches = async () => {
+    setLoadingBatches(true)
+    try {
+      const response = await axios.get('http://localhost:5001/api/batches')
+      if (response.data.success) {
+        setBatches(response.data.batches)
+      }
+    } catch (error: any) {
+      console.error('获取批次列表失败:', error)
+    } finally {
+      setLoadingBatches(false)
     }
   }
 
@@ -178,6 +200,14 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       return
     }
 
+    // 验证批次标签必填
+    if (!batchLabel.trim()) {
+      setUploadMessage('请输入批次标签')
+      setUploadSuccess(false)
+      setTimeout(() => setUploadMessage(''), 3000)
+      return
+    }
+
     setUploading(true)
     setUploadProgress(0)
     setUploadSuccess(false)
@@ -186,6 +216,9 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     selectedFiles.forEach(file => {
       formData.append('files', file)
     })
+    
+    // 添加批次标签（必填）
+    formData.append('label', batchLabel.trim())
 
     try {
       const response = await axios.post('http://localhost:5001/api/upload', formData, {
@@ -202,15 +235,19 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
 
       if (response.data.success) {
         setUploadSuccess(true)
-        setUploadMessage(`成功上传 ${response.data.count} 个文件！`)
+        const batchInfo = response.data.batch_id 
+          ? `批次: ${response.data.batch_id}` 
+          : ''
+        setUploadMessage(`成功上传 ${response.data.count} 个文件！${batchInfo}`)
         setSelectedFiles([])
+        setBatchLabel('')
         fetchUploadedFiles()
         
-        // 3秒后清除成功消息
+        // 5秒后清除成功消息
         setTimeout(() => {
           setUploadSuccess(false)
           setUploadMessage('')
-        }, 3000)
+        }, 5000)
       }
     } catch (error: any) {
       setUploadSuccess(false)
@@ -351,9 +388,9 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   }
 
   const handleProceedToConfig = () => {
-    if (uploadedFiles.length === 0) {
+    if (uploadedFiles.length === 0 && batches.length === 0) {
       setUploadSuccess(false)
-      setUploadMessage('请先上传邮件文件')
+      setUploadMessage('请先上传邮件文件或创建批次')
       setTimeout(() => setUploadMessage(''), 3000)
       return
     }
@@ -374,6 +411,12 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       return
     }
 
+    // 检查是否选择了批次
+    if (selectedBatchIds.length === 0) {
+      alert('请至少选择一个批次进行处理')
+      return
+    }
+
     setRunning(true)
     setShouldStop(false)
     setProgress(0)
@@ -384,6 +427,8 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     console.log('🚀 开始全自动处理流程')
     console.log('=================================')
     console.log('配置信息:')
+    console.log('- 选中批次:', selectedBatchIds.length, '个')
+    console.log('- 批次列表:', selectedBatchIds)
     console.log('- LLM API Key:', config.llmApiKey.substring(0, 8) + '...')
     console.log('- KB API Key:', config.kbApiKey.substring(0, 8) + '...')
     console.log('- 知识库ID:', config.selectedKnowledgeBase)
@@ -399,23 +444,31 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       // 步骤1: 邮件清洗（去重、转markdown）
       setCurrentStep('邮件清洗去重中...')
       setProgress(10)
-      addLog('📧 步骤1: 开始邮件清洗和去重')
+      addLog(`📧 步骤1: 开始邮件清洗和去重 (${selectedBatchIds.length}个批次)`)
       console.log('=== 步骤1: 邮件清洗 ===')
       console.log('请求URL:', 'http://localhost:5001/api/auto/clean')
-      console.log('请求参数:', { files: 'all' })
+      console.log('请求参数:', { batch_ids: selectedBatchIds })
       
       const cleanResponse = await axios.post('http://localhost:5001/api/auto/clean', {
-        files: 'all'
+        batch_ids: selectedBatchIds,
+        skip_if_exists: true  // 启用智能跳过
       })
       
       console.log('清洗响应:', cleanResponse.data)
       
       if (cleanResponse.data.success) {
-        addLog(`✅ 邮件去重完成: ${cleanResponse.data.processed_count} 个文件`)
-        console.log('✅ 步骤1成功: 处理了', cleanResponse.data.processed_count, '个文件')
-        if (cleanResponse.data.duplicates > 0) {
-          addLog(`   去除重复邮件: ${cleanResponse.data.duplicates} 个`)
+        if (cleanResponse.data.skipped) {
+          addLog(`⏭️ 邮件去重已完成，跳过此步骤`)
+          if (cleanResponse.data.skipped_batches && cleanResponse.data.skipped_batches.length > 0) {
+            addLog(`   跳过批次: ${cleanResponse.data.skipped_batches.join(', ')}`)
+          }
+        } else {
+          addLog(`✅ 邮件去重完成: ${cleanResponse.data.processed_count} 个文件`)
+          if (cleanResponse.data.duplicates > 0) {
+            addLog(`   去除重复邮件: ${cleanResponse.data.duplicates} 个`)
+          }
         }
+        console.log('✅ 步骤1成功: 处理了', cleanResponse.data.processed_count, '个文件')
         setProgress(30)
       } else {
         console.error('❌ 步骤1失败:', cleanResponse.data.error)
@@ -475,7 +528,9 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       
       const llmResponse = await axios.post('http://localhost:5001/api/auto/llm-process', {
         api_key: config.llmApiKey,
-        delay: 2
+        delay: 2,
+        batch_ids: selectedBatchIds,
+        skip_if_exists: true  // 启用智能跳过
       })
       
       clearInterval(progressInterval) // 清除进度监控
@@ -484,7 +539,17 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       console.log('LLM响应详情:', JSON.stringify(llmResponse.data, null, 2))
       
       if (llmResponse.data.success) {
-        addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
+        if (llmResponse.data.skipped) {
+          addLog(`⏭️ LLM处理已完成，跳过此步骤`)
+          if (llmResponse.data.skipped_batches && llmResponse.data.skipped_batches.length > 0) {
+            addLog(`   跳过批次: ${llmResponse.data.skipped_batches.join(', ')}`)
+          }
+        } else {
+          addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
+          if (llmResponse.data.failed_count > 0) {
+            addLog(`   ⚠️ 失败: ${llmResponse.data.failed_count} 个文件`)
+          }
+        }
         console.log('✅ 步骤2成功: 处理了', llmResponse.data.processed_count, '个文件')
         if (llmResponse.data.failed_count > 0) {
           console.warn('⚠️ 失败:', llmResponse.data.failed_count, '个文件')
@@ -511,7 +576,9 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       const kbUploadParams: any = {
         api_key: config.kbApiKey,
         knowledge_base_id: config.selectedKnowledgeBase,
-        batch_size: 15  // API限制每批最多20个，使用15确保稳定（自动分批）
+        batch_size: 15,  // API限制每批最多20个，使用15确保稳定（自动分批）
+        batch_ids: selectedBatchIds,
+        skip_if_exists: true  // 启用智能跳过
       }
       
       // 根据分块模式选择参数
@@ -537,7 +604,14 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       console.log('知识库上传响应:', kbResponse.data)
       
       if (kbResponse.data.success) {
-        addLog(`✅ 知识库上传完成: ${kbResponse.data.uploaded_count} 个文件`)
+        if (kbResponse.data.skipped) {
+          addLog(`⏭️ 知识库上传已完成，跳过此步骤`)
+          if (kbResponse.data.skipped_batches && kbResponse.data.skipped_batches.length > 0) {
+            addLog(`   跳过批次: ${kbResponse.data.skipped_batches.join(', ')}`)
+          }
+        } else {
+          addLog(`✅ 知识库上传完成: ${kbResponse.data.uploaded_count} 个文件`)
+        }
         console.log('✅ 步骤3成功: 上传了', kbResponse.data.uploaded_count, '个文件')
         setProgress(100)
         setCurrentStep('全部完成！')
@@ -628,6 +702,35 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
                   <HiX /> 清空全部
                 </button>
               </div>
+              
+              {/* 批次标签输入框 */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, marginBottom: '8px', color: '#4a5568' }}>
+                  批次标签 <span style={{ color: '#e53e3e' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  value={batchLabel}
+                  onChange={(e) => setBatchLabel(e.target.value)}
+                  placeholder="邮件主要内容"
+                  disabled={uploading}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    transition: 'all 0.3s'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
+                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+                />
+                <p style={{ fontSize: '12px', color: '#718096', margin: '6px 0 0 0' }}>
+                  💡 添加标签方便后续查找和管理批次
+                </p>
+              </div>
+              
               <div className="file-list">
                 {selectedFiles.map((file, index) => (
                   <div key={index} className="file-item-with-remove">
@@ -773,7 +876,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
         </div>
 
         {/* 下一步按钮 */}
-        {uploadedFiles.length > 0 && (
+        {(uploadedFiles.length > 0 || batches.length > 0) && (
           <button
             onClick={handleProceedToConfig}
             className="proceed-button"
@@ -1232,13 +1335,38 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   if (activeView === 'config') {
     return (
       <div className="auto-pipeline-container">
+        {/* 处理中的提示 */}
+        {running && (
+          <div style={{
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            padding: '16px 20px',
+            borderRadius: '12px',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)'
+          }}>
+            <BiLoaderAlt className="spinner" style={{ fontSize: '24px' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                处理正在后台进行中...
+              </div>
+              <div style={{ fontSize: '13px', opacity: 0.9 }}>
+                💡 您可以切换到其他页面，处理不会中断。完成后可返回查看结果。
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h2 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center' }}>
             <HiCog style={{ fontSize: '28px', marginRight: '12px' }} />
             全自动处理配置
           </h2>
           <button 
-            onClick={() => setCurrentView('upload')}
+            onClick={() => onNavigate?.('batches')}
             style={{
               padding: '10px 20px',
               background: '#e2e8f0',
@@ -1249,8 +1377,291 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
               fontWeight: 500
             }}
           >
-            ← 返回上传
+            ← 返回批次管理
           </button>
+        </div>
+
+        {/* 批次选择部分 */}
+        <div className="config-section" style={{ marginBottom: '30px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h3 style={{ fontSize: '20px', margin: 0, display: 'flex', alignItems: 'center' }}>
+              <HiFolderOpen style={{ fontSize: '24px', marginRight: '12px' }} />
+              选择要处理的批次
+            </h3>
+            <label style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '8px',
+              cursor: 'pointer',
+              padding: '8px 16px',
+              background: hideCompletedBatches ? '#e6fffa' : '#f7fafc',
+              border: `2px solid ${hideCompletedBatches ? '#38b2ac' : '#e2e8f0'}`,
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: hideCompletedBatches ? '#234e52' : '#4a5568',
+              transition: 'all 0.3s'
+            }}>
+              <input
+                type="checkbox"
+                checked={hideCompletedBatches}
+                onChange={(e) => setHideCompletedBatches(e.target.checked)}
+                style={{ 
+                  width: '16px', 
+                  height: '16px',
+                  cursor: 'pointer'
+                }}
+              />
+              隐藏已完成批次
+            </label>
+          </div>
+          
+          {loadingBatches ? (
+            <div style={{ textAlign: 'center', padding: '40px' }}>
+              <BiLoaderAlt className="spinner" style={{ fontSize: '32px', color: '#667eea' }} />
+              <p style={{ marginTop: '16px', color: '#718096' }}>加载批次列表中...</p>
+            </div>
+          ) : batches.length === 0 ? (
+            <div style={{ 
+              padding: '40px', 
+              textAlign: 'center', 
+              background: '#f7fafc', 
+              borderRadius: '12px',
+              border: '2px dashed #cbd5e0'
+            }}>
+              <p style={{ fontSize: '16px', color: '#718096', marginBottom: '8px' }}>暂无批次</p>
+              <p style={{ fontSize: '14px', color: '#a0aec0' }}>请先在"批次管理"页面创建批次</p>
+            </div>
+          ) : (() => {
+            // 根据 hideCompletedBatches 过滤批次
+            const filteredBatches = hideCompletedBatches 
+              ? batches.filter(batch => !batch.status?.uploaded_to_kb)
+              : batches
+            
+            if (filteredBatches.length === 0) {
+              return (
+                <div style={{ 
+                  padding: '40px', 
+                  textAlign: 'center', 
+                  background: '#f7fafc', 
+                  borderRadius: '12px',
+                  border: '2px dashed #cbd5e0'
+                }}>
+                  <p style={{ fontSize: '16px', color: '#718096', marginBottom: '8px' }}>
+                    {hideCompletedBatches ? '所有批次都已完成处理' : '暂无批次'}
+                  </p>
+                  <p style={{ fontSize: '14px', color: '#a0aec0' }}>
+                    {hideCompletedBatches ? '请取消筛选或创建新批次' : '请先在"批次管理"页面创建批次'}
+                  </p>
+                </div>
+              )
+            }
+            
+            return (
+              <>
+                <div style={{ 
+                  background: '#e6fffa', 
+                  border: '2px solid #81e6d9',
+                  borderRadius: '10px',
+                  padding: '16px 20px',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '10px',
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    color: '#234e52',
+                    marginBottom: '8px'
+                  }}>
+                    <HiCheckCircle style={{ color: '#38b2ac', fontSize: '20px' }} />
+                    <span>
+                      {hideCompletedBatches 
+                        ? `找到 ${filteredBatches.length} 个未完成批次` 
+                        : `找到 ${batches.length} 个批次`}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '14px', color: '#2c7a7b', margin: 0 }}>
+                    {selectedBatchIds.length > 0 
+                      ? `已选择 ${selectedBatchIds.length} 个批次进行处理` 
+                      : '请选择要处理的批次（可多选）'}
+                  </p>
+                </div>
+
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                  gap: '16px',
+                  marginBottom: '20px'
+                }}>
+                  {filteredBatches.map((batch) => {
+                    const isSelected = selectedBatchIds.includes(batch.batch_id)
+                    return (
+                    <div
+                      key={batch.batch_id}
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedBatchIds(prev => prev.filter(id => id !== batch.batch_id))
+                        } else {
+                          setSelectedBatchIds(prev => [...prev, batch.batch_id])
+                        }
+                      }}
+                      style={{
+                        padding: '16px',
+                        background: isSelected ? '#ebf8ff' : 'white',
+                        border: `2px solid ${isSelected ? '#4299e1' : '#e2e8f0'}`,
+                        borderRadius: '10px',
+                        cursor: 'pointer',
+                        transition: 'all 0.3s'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.borderColor = '#cbd5e0'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.borderColor = '#e2e8f0'
+                        }
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '12px' }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}}
+                          style={{ 
+                            marginRight: '12px', 
+                            marginTop: '2px',
+                            width: '18px',
+                            height: '18px',
+                            cursor: 'pointer'
+                          }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ 
+                            fontSize: '14px', 
+                            fontWeight: 700, 
+                            color: '#2d3748',
+                            marginBottom: '6px',
+                            wordBreak: 'break-word'
+                          }}>
+                            {batch.batch_id}
+                          </div>
+                          {batch.custom_label && (
+                            <div style={{ 
+                              fontSize: '13px', 
+                              color: '#667eea', 
+                              fontWeight: 600,
+                              marginBottom: '6px'
+                            }}>
+                              🏷️ {batch.custom_label}
+                            </div>
+                          )}
+                          <div style={{ 
+                            fontSize: '12px', 
+                            color: '#718096',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}>
+                            <HiClock />
+                            {new Date(batch.upload_time).toLocaleString('zh-CN', {
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ 
+                        paddingTop: '12px',
+                        borderTop: '1px solid #e2e8f0',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px'
+                      }}>
+                        <div style={{ fontSize: '13px', color: '#4a5568' }}>
+                          📧 {batch.file_count} 个文件
+                        </div>
+                        {/* 处理进度 */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '6px',
+                          fontSize: '12px',
+                          fontWeight: 600
+                        }}>
+                          {batch.status?.uploaded_to_kb ? (
+                            <span style={{ color: '#38a169', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              ✅ 已完成全部流程
+                            </span>
+                          ) : batch.status?.llm_processed ? (
+                            <span style={{ color: '#3182ce', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              🤖 已完成LLM处理
+                            </span>
+                          ) : batch.status?.cleaned ? (
+                            <span style={{ color: '#d69e2e', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              🧹 已完成去重
+                            </span>
+                          ) : (
+                            <span style={{ color: '#718096', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              📤 已上传
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+                <button
+                  onClick={() => {
+                    if (selectedBatchIds.length === filteredBatches.length) {
+                      setSelectedBatchIds([])
+                    } else {
+                      setSelectedBatchIds(filteredBatches.map(b => b.batch_id))
+                    }
+                  }}
+                  disabled={running}
+                  style={{
+                    padding: '10px 20px',
+                    background: selectedBatchIds.length === filteredBatches.length ? '#fed7d7' : '#e2e8f0',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: selectedBatchIds.length === filteredBatches.length ? '#c53030' : '#4a5568',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.3s'
+                  }}
+                >
+                  {selectedBatchIds.length === filteredBatches.length ? '取消全选' : '全选'}
+                </button>
+                <button
+                  onClick={() => setSelectedBatchIds([])}
+                  disabled={running || selectedBatchIds.length === 0}
+                  style={{
+                    padding: '10px 20px',
+                    background: selectedBatchIds.length === 0 ? '#f7fafc' : '#e2e8f0',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: selectedBatchIds.length === 0 ? '#cbd5e0' : '#4a5568',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: selectedBatchIds.length === 0 ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  清空
+                </button>
+              </div>
+            </>
+            )
+          })()}
         </div>
 
         {/* LLM配置部分 */}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { HiCloudUpload, HiCog, HiChartBar, HiChip } from 'react-icons/hi'
+import { HiCloudUpload, HiCog, HiChartBar, HiChip, HiFolderOpen } from 'react-icons/hi'
 import axios from 'axios'
 
 interface OverviewProps {
@@ -8,6 +8,10 @@ interface OverviewProps {
 
 export default function Overview({ onNavigate }: OverviewProps) {
   const [stats, setStats] = useState({
+    totalBatches: 0,
+    processingBatches: 0,
+    completedBatches: 0,
+    totalFiles: 0,
     uploaded: 0,
     cleaned: 0,
     processed: 0,
@@ -20,10 +24,42 @@ export default function Overview({ onNavigate }: OverviewProps) {
 
   const fetchStats = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/stats')
-      if (response.data.success) {
-        setStats(response.data.stats)
+      // 获取批次统计
+      const batchesResponse = await axios.get('http://localhost:5001/api/batches')
+      let totalBatches = 0
+      let processingBatches = 0
+      let completedBatches = 0
+      let totalFiles = 0
+      
+      if (batchesResponse.data.success) {
+        const batches = batchesResponse.data.batches
+        totalBatches = batches.length
+        
+        batches.forEach((batch: any) => {
+          totalFiles += batch.file_count || 0
+          
+          if (batch.status?.uploaded_to_kb) {
+            completedBatches++
+          } else if (batch.status?.cleaned || batch.status?.llm_processed) {
+            processingBatches++
+          }
+        })
       }
+      
+      // 获取文件统计
+      const statsResponse = await axios.get('http://localhost:5001/api/stats')
+      const fileStats = statsResponse.data.success ? statsResponse.data.stats : {}
+      
+      setStats({
+        totalBatches,
+        processingBatches,
+        completedBatches,
+        totalFiles,
+        uploaded: fileStats.uploaded || 0,
+        cleaned: fileStats.cleaned || 0,
+        processed: fileStats.processed || 0,
+        inKnowledgeBase: fileStats.inKnowledgeBase || 0
+      })
     } catch (error) {
       console.error('获取统计信息失败:', error)
     }
@@ -34,44 +70,44 @@ export default function Overview({ onNavigate }: OverviewProps) {
       <div className="glass-card">
         <h2>📊 系统概览</h2>
         
-        {/* 统计卡片 */}
+        {/* 批次统计卡片 */}
         <div className="stats-grid">
-          <div className="stat-card">
+          <div className="stat-card" onClick={() => onNavigate('batches')} style={{ cursor: 'pointer' }}>
             <div className="stat-icon" style={{ color: '#667eea' }}>
+              📁
+            </div>
+            <h3 className="stat-value">{stats.totalBatches}</h3>
+            <p className="stat-label">总批次数</p>
+          </div>
+
+          <div className="stat-card" onClick={() => onNavigate('batches')} style={{ cursor: 'pointer' }}>
+            <div className="stat-icon" style={{ color: '#f6ad55' }}>
+              ⏳
+            </div>
+            <h3 className="stat-value">{stats.processingBatches}</h3>
+            <p className="stat-label">处理中批次</p>
+          </div>
+
+          <div className="stat-card" onClick={() => onNavigate('batches')} style={{ cursor: 'pointer' }}>
+            <div className="stat-icon" style={{ color: '#48bb78' }}>
+              ✅
+            </div>
+            <h3 className="stat-value">{stats.completedBatches}</h3>
+            <p className="stat-label">已完成批次</p>
+          </div>
+
+          <div className="stat-card" onClick={() => onNavigate('results')} style={{ cursor: 'pointer' }}>
+            <div className="stat-icon" style={{ color: '#9f7aea' }}>
               📧
             </div>
-            <h3 className="stat-value">{stats.uploaded}</h3>
-            <p className="stat-label">已上传邮件</p>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon" style={{ color: '#48bb78' }}>
-              🧹
-            </div>
-            <h3 className="stat-value">{stats.cleaned}</h3>
-            <p className="stat-label">已清洗邮件</p>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon" style={{ color: '#ed8936' }}>
-              🤖
-            </div>
-            <h3 className="stat-value">{stats.processed}</h3>
-            <p className="stat-label">LLM处理完成</p>
-          </div>
-
-          <div className="stat-card">
-            <div className="stat-icon" style={{ color: '#9f7aea' }}>
-              📚
-            </div>
-            <h3 className="stat-value">{stats.inKnowledgeBase}</h3>
-            <p className="stat-label">知识库文档</p>
+            <h3 className="stat-value">{stats.totalFiles}</h3>
+            <p className="stat-label">累计处理文件</p>
           </div>
         </div>
       </div>
 
       <div className="glass-card">
-        <h2>🔄 处理流程</h2>
+        <h2>🔄 批次处理流程</h2>
         <div style={{ 
           background: 'white', 
           padding: '32px', 
@@ -86,32 +122,32 @@ export default function Overview({ onNavigate }: OverviewProps) {
             margin: '0 auto'
           }}>
             <ProcessStep 
-              icon={<HiCloudUpload />}
-              title="1. 邮件上传"
-              description="上传EML格式邮件文件，支持批量上传"
+              icon={<HiFolderOpen />}
+              title="1. 创建批次"
+              description="在批次管理中创建新批次，添加自定义标签，上传EML邮件文件"
               color="#667eea"
-              onClick={() => onNavigate('upload')}
+              onClick={() => onNavigate('batches')}
             />
             <ProcessStep 
               icon={<HiCog />}
-              title="2. 数据清洗"
-              description="自动提取邮件内容，去除HTML标签和重复信息"
+              title="2. 选择批次"
+              description="在全自动配置中选择要处理的批次，支持多批次同时处理"
               color="#48bb78"
-              onClick={() => onNavigate('cleaning')}
+              onClick={() => onNavigate('auto')}
             />
             <ProcessStep 
               icon={<HiChip />}
-              title="3. LLM处理"
-              description="使用AI技术进行内容优化和结构化处理"
+              title="3. 自动处理"
+              description="一键执行去重清洗、LLM优化、知识库上传，智能跳过已完成步骤"
               color="#ed8936"
-              onClick={() => onNavigate('llm')}
+              onClick={() => onNavigate('auto')}
             />
             <ProcessStep 
               icon={<HiChartBar />}
-              title="4. 知识库构建"
-              description="上传到知识库，支持智能问答和内容检索"
+              title="4. 查看结果"
+              description="按批次查看处理结果，预览不同阶段的文件，标记知识库信息"
               color="#9f7aea"
-              onClick={() => onNavigate('knowledge')}
+              onClick={() => onNavigate('results')}
             />
           </div>
         </div>
@@ -124,10 +160,17 @@ export default function Overview({ onNavigate }: OverviewProps) {
         }}>
           <button 
             className="btn btn-primary"
+            onClick={() => onNavigate('batches')}
+          >
+            <HiFolderOpen />
+            开始创建批次
+          </button>
+          <button 
+            className="btn btn-secondary"
             onClick={() => onNavigate('auto')}
           >
-            <HiCloudUpload />
-            开始吧！
+            <HiCog />
+            全自动处理
           </button>
           <button 
             className="btn btn-secondary"
