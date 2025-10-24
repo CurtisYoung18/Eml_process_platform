@@ -64,7 +64,8 @@ export default function HomePage() {
           </div>
         )}
         <iframe
-          src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
+          // src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
+          src="https://www.gptbots.ai/widget/eeplkgy817ccpfakwnz3ukz/chat.html"
           className={`qa-iframe ${iframeLoaded ? 'loaded' : ''}`}
           onLoad={() => setIframeLoaded(true)}
           title="知识库问答"
@@ -72,7 +73,7 @@ export default function HomePage() {
         />
       </div>
 
-
+  
       <style jsx>{`
         .qa-main-page {
           width: 100vw;

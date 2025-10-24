@@ -23,6 +23,7 @@ export default function AdminPage() {
   const [currentPage, setCurrentPage] = useState('overview')
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [isProcessing, setIsProcessing] = useState(false)  // 新增：处理中状态
 
   useEffect(() => {
     // 检查登录状态
@@ -49,7 +50,7 @@ export default function AdminPage() {
       case 'overview':
         return <Overview onNavigate={setCurrentPage} />
       case 'auto':
-        return <AutoPipeline onNavigate={setCurrentPage} />
+        return <AutoPipeline onNavigate={setCurrentPage} onProcessingChange={setIsProcessing} />
       case 'batches':
         return <BatchManager />
       case 'results':
@@ -139,8 +140,14 @@ export default function AdminPage() {
             {navItems.map((item) => (
               <button
                 key={item.id}
-                className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
-                onClick={() => setCurrentPage(item.id)}
+                className={`nav-item ${currentPage === item.id ? 'active' : ''} ${isProcessing && item.id !== 'auto' ? 'disabled' : ''}`}
+                onClick={() => !isProcessing && setCurrentPage(item.id)}
+                disabled={isProcessing && item.id !== 'auto'}
+                style={{
+                  cursor: isProcessing && item.id !== 'auto' ? 'not-allowed' : 'pointer',
+                  opacity: isProcessing && item.id !== 'auto' ? 0.5 : 1,
+                  pointerEvents: isProcessing && item.id !== 'auto' ? 'none' : 'auto'
+                }}
               >
                 <item.icon className="nav-icon" />
                 <span className="nav-label">{item.label}</span>

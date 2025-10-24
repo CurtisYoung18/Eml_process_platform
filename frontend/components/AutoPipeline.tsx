@@ -5,10 +5,23 @@ import axios from 'axios'
 
 interface AutoPipelineProps {
   onNavigate?: (page: string) => void
+  onProcessingChange?: (isProcessing: boolean) => void  // 新增：处理状态变化回调
 }
 
-export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
-  const [currentView, setCurrentView] = useState<'upload' | 'config' | 'completed'>('config')
+// 动态获取API基础URL（支持远程访问）
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    // 使用当前访问的主机名和端口5001
+    const hostname = window.location.hostname
+    return `http://${hostname}:5001`
+  }
+  return 'http://localhost:5001'
+}
+
+const API_BASE_URL = getApiBaseUrl()
+
+export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPipelineProps) {
+  const [currentView, setCurrentView] = useState<'config' | 'completed'>('config')
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(0)
   const [currentStep, setCurrentStep] = useState('')
@@ -42,6 +55,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   // 环境变量配置
   const [envConfig, setEnvConfig] = useState<any>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
+  const [envConfigError, setEnvConfigError] = useState<string>('')  // 配置加载错误信息
   
   // 知识库列表
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([])
@@ -51,7 +65,20 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   const [batches, setBatches] = useState<any[]>([])
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
   const [loadingBatches, setLoadingBatches] = useState(false)
-  const [hideCompletedBatches, setHideCompletedBatches] = useState(false)
+  const [hideCompletedBatches, setHideCompletedBatches] = useState(true)  // 默认隐藏已完成批次
+  
+  // 配置折叠状态
+  const [showLlmConfig, setShowLlmConfig] = useState(false)  // 默认折叠LLM配置
+  const [showKbConfig, setShowKbConfig] = useState(false)    // 默认折叠知识库配置
+  
+  // 预计时间相关状态
+  const [estimatedTime, setEstimatedTime] = useState(0)  // 预计总时间（秒）
+  const [remainingTime, setRemainingTime] = useState(0)  // 剩余时间（秒）
+  const [startTime, setStartTime] = useState(0)  // 开始处理的时间戳
+  const [totalFilesToProcess, setTotalFilesToProcess] = useState(0)  // 总文件数
+  
+  // 全局重复邮件
+  const [globalDuplicates, setGlobalDuplicates] = useState<any[]>([])
 
   useEffect(() => {
     fetchUploadedFiles()
@@ -59,11 +86,36 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     fetchLlmProcessedFiles()
     fetchBatches()
     
-    // 如果正在运行，确保显示配置页面
-    if (running && currentView === 'upload') {
-      setCurrentView('config')
-    }
-  }, [])
+    // 每次组件挂载时都刷新批次列表，确保显示最新状态
+    const interval = setInterval(() => {
+      if (running) {
+        fetchBatches()
+      }
+    }, 5000)  // 每5秒刷新一次批次状态
+    
+    return () => clearInterval(interval)
+  }, [running])
+
+  // 通知父组件处理状态变化
+  useEffect(() => {
+    onProcessingChange?.(running)
+  }, [running, onProcessingChange])
+  
+  // 倒计时逻辑
+  useEffect(() => {
+    if (!running || remainingTime <= 0) return
+    
+    const timer = setInterval(() => {
+      setRemainingTime(prev => {
+        if (prev <= 1) {
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    
+    return () => clearInterval(timer)
+  }, [running, remainingTime])
 
   useEffect(() => {
     if (currentView === 'config') {
@@ -73,8 +125,9 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
 
   const fetchEnvConfig = async () => {
     setLoadingConfig(true)
+    setEnvConfigError('')
     try {
-      const response = await axios.get('http://localhost:5001/api/config/env')
+      const response = await axios.get(`${API_BASE_URL}/api/config/env`)
       if (response.data.success) {
         setEnvConfig(response.data.config)
         // 默认选择第一个LLM API Key
@@ -97,9 +150,25 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
           // 自动获取知识库列表
           fetchKnowledgeBases(firstKbKey.value)
         }
+      } else {
+        // 保存详细错误信息
+        const errorMsg = response.data.error || '未知错误'
+        const details = response.data.details || ''
+        const cwd = response.data.cwd || ''
+        const scriptDir = response.data.script_dir || ''
+        
+        let fullError = `${errorMsg}\n\n`
+        if (details) fullError += `详细信息:\n${details}\n\n`
+        if (cwd) fullError += `当前工作目录: ${cwd}\n`
+        if (scriptDir) fullError += `脚本目录: ${scriptDir}`
+        
+        setEnvConfigError(fullError)
+        console.error('环境配置错误:', response.data)
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('获取环境配置失败:', error)
+      const errorMsg = error.response?.data?.error || error.message || '网络错误'
+      setEnvConfigError(`无法连接到后端API\n错误: ${errorMsg}\n\n请确保后端服务正在运行 (port 5001)`)
     } finally {
       setLoadingConfig(false)
     }
@@ -108,7 +177,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   const fetchBatches = async () => {
     setLoadingBatches(true)
     try {
-      const response = await axios.get('http://localhost:5001/api/batches')
+      const response = await axios.get(`${API_BASE_URL}/api/batches`)
       if (response.data.success) {
         setBatches(response.data.batches)
       }
@@ -122,7 +191,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   const fetchKnowledgeBases = async (apiKey: string) => {
     setLoadingKBList(true)
     try {
-      const response = await axios.post('http://localhost:5001/api/knowledge-bases', {
+      const response = await axios.post(`${API_BASE_URL}/api/knowledge-bases`, {
         api_key: apiKey
       })
       if (response.data.success) {
@@ -153,9 +222,20 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`])
   }
 
+  // 格式化剩余时间
+  const formatTime = (seconds: number) => {
+    if (seconds <= 0) return '即将完成'
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    if (mins > 0) {
+      return `${mins}分${secs}秒`
+    }
+    return `${secs}秒`
+  }
+
   const fetchUploadedFiles = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/uploaded-files')
+      const response = await axios.get(`${API_BASE_URL}/api/uploaded-files`)
       if (response.data.success) {
         setUploadedFiles(response.data.files)
       }
@@ -166,7 +246,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
 
   const fetchProcessedFiles = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/processed-files')
+      const response = await axios.get(`${API_BASE_URL}/api/processed-files`)
       if (response.data.success) {
         setProcessedFiles(response.data.files)
       }
@@ -177,7 +257,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
 
   const fetchLlmProcessedFiles = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/llm-processed-files')
+      const response = await axios.get(`${API_BASE_URL}/api/llm-processed-files`)
       if (response.data.success) {
         setLlmProcessedFiles(response.data.files)
       }
@@ -221,7 +301,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     formData.append('label', batchLabel.trim())
 
     try {
-      const response = await axios.post('http://localhost:5001/api/upload', formData, {
+      const response = await axios.post(`${API_BASE_URL}/api/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         },
@@ -423,11 +503,33 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
     setLogs([])
     addLog('🚀 开始全自动处理流程...')
     
+    // 计算总文件数
+    const totalFiles = selectedBatchIds.reduce((sum, batchId) => {
+      const batch = batches.find(b => b.batch_id === batchId)
+      return sum + (batch?.file_count || 0)
+    }, 0)
+    setTotalFilesToProcess(totalFiles)
+    
+    // 预估处理时间：根据实际流程计算
+    // 清洗去重: 0.5秒/文件
+    // LLM处理: 2-3秒/文件（API调用）
+    // 知识库上传: 1秒/文件
+    // 总计约: 4-5秒/文件
+    const avgTimePerFile = 4.5  // 秒（更接近实际情况）
+    const estimated = totalFiles * avgTimePerFile
+    setEstimatedTime(estimated)
+    setRemainingTime(estimated)
+    setStartTime(Date.now())
+    
+    addLog(`📊 预计处理 ${totalFiles} 个文件，预计用时: ${Math.floor(estimated / 60)}分${estimated % 60}秒`)
+    
     console.log('=================================')
     console.log('🚀 开始全自动处理流程')
     console.log('=================================')
     console.log('配置信息:')
     console.log('- 选中批次:', selectedBatchIds.length, '个')
+    console.log('- 总文件数:', totalFiles, '个')
+    console.log('- 预计用时:', estimated, '秒')
     console.log('- 批次列表:', selectedBatchIds)
     console.log('- LLM API Key:', config.llmApiKey.substring(0, 8) + '...')
     console.log('- KB API Key:', config.kbApiKey.substring(0, 8) + '...')
@@ -446,10 +548,10 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       setProgress(10)
       addLog(`📧 步骤1: 开始邮件清洗和去重 (${selectedBatchIds.length}个批次)`)
       console.log('=== 步骤1: 邮件清洗 ===')
-      console.log('请求URL:', 'http://localhost:5001/api/auto/clean')
+      console.log('请求URL:', `${API_BASE_URL}/api/auto/clean`)
       console.log('请求参数:', { batch_ids: selectedBatchIds })
       
-      const cleanResponse = await axios.post('http://localhost:5001/api/auto/clean', {
+      const cleanResponse = await axios.post(`${API_BASE_URL}/api/auto/clean`, {
         batch_ids: selectedBatchIds,
         skip_if_exists: true  // 启用智能跳过
       })
@@ -463,10 +565,15 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
             addLog(`   跳过批次: ${cleanResponse.data.skipped_batches.join(', ')}`)
           }
         } else {
-          addLog(`✅ 邮件去重完成: ${cleanResponse.data.processed_count} 个文件`)
-          if (cleanResponse.data.duplicates > 0) {
-            addLog(`   去除重复邮件: ${cleanResponse.data.duplicates} 个`)
-          }
+        addLog(`✅ 邮件去重完成: ${cleanResponse.data.processed_count} 个文件`)
+        if (cleanResponse.data.duplicates > 0) {
+          addLog(`   去除重复邮件: ${cleanResponse.data.duplicates} 个`)
+        }
+        // 显示并保存全局重复邮件
+        if (cleanResponse.data.global_duplicates && cleanResponse.data.global_duplicates.length > 0) {
+          addLog(`   🔄 跨批次重复邮件: ${cleanResponse.data.global_duplicates.length} 个（已跳过）`)
+          setGlobalDuplicates(cleanResponse.data.global_duplicates)
+        }
         }
         console.log('✅ 步骤1成功: 处理了', cleanResponse.data.processed_count, '个文件')
         setProgress(30)
@@ -488,7 +595,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
       setCurrentStep(`LLM内容处理中 (0/${totalFiles})...`)
       addLog(`🤖 步骤2: 开始LLM内容处理 (共${totalFiles}个文件)`)
       console.log('=== 步骤2: LLM处理 ===')
-      console.log('请求URL:', 'http://localhost:5001/api/auto/llm-process')
+      console.log('请求URL:', `${API_BASE_URL}/api/auto/llm-process`)
       console.log('请求参数:', {
         api_key: config.llmApiKey.substring(0, 8) + '...',
         delay: 2,
@@ -506,7 +613,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
         
         try {
           // 获取当前已处理的文件数
-          const statsResponse = await axios.get('http://localhost:5001/api/llm-processed-files')
+          const statsResponse = await axios.get(`${API_BASE_URL}/api/llm-processed-files`)
           if (statsResponse.data.success) {
             const currentCount = statsResponse.data.files.length
             if (currentCount > lastProcessedCount) {
@@ -526,7 +633,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
         }
       }, 1000) // 每1秒检查一次
       
-      const llmResponse = await axios.post('http://localhost:5001/api/auto/llm-process', {
+      const llmResponse = await axios.post(`${API_BASE_URL}/api/auto/llm-process`, {
         api_key: config.llmApiKey,
         delay: 2,
         batch_ids: selectedBatchIds,
@@ -545,7 +652,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
             addLog(`   跳过批次: ${llmResponse.data.skipped_batches.join(', ')}`)
           }
         } else {
-          addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
+        addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
           if (llmResponse.data.failed_count > 0) {
             addLog(`   ⚠️ 失败: ${llmResponse.data.failed_count} 个文件`)
           }
@@ -590,7 +697,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
         console.log('分块模式: 分隔符 =', config.chunkSeparator)
       }
       
-      console.log('请求URL:', 'http://localhost:5001/api/auto/upload-kb')
+      console.log('请求URL:', `${API_BASE_URL}/api/auto/upload-kb`)
       console.log('请求参数:', {
         api_key: config.kbApiKey.substring(0, 8) + '...',
         knowledge_base_id: config.selectedKnowledgeBase,
@@ -599,7 +706,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
         note: '后端会自动分批处理，每批最多15个文件'
       })
       
-      const kbResponse = await axios.post('http://localhost:5001/api/auto/upload-kb', kbUploadParams)
+      const kbResponse = await axios.post(`${API_BASE_URL}/api/auto/upload-kb`, kbUploadParams)
       
       console.log('知识库上传响应:', kbResponse.data)
       
@@ -610,7 +717,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
             addLog(`   跳过批次: ${kbResponse.data.skipped_batches.join(', ')}`)
           }
         } else {
-          addLog(`✅ 知识库上传完成: ${kbResponse.data.uploaded_count} 个文件`)
+        addLog(`✅ 知识库上传完成: ${kbResponse.data.uploaded_count} 个文件`)
         }
         console.log('✅ 步骤3成功: 上传了', kbResponse.data.uploaded_count, '个文件')
         setProgress(100)
@@ -652,714 +759,10 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
   // 如果正在处理，强制显示配置页面（保持处理状态）
   const activeView = running ? 'config' : currentView
 
-  if (activeView === 'upload') {
-    return (
-      <div className="auto-pipeline-container">
-        <h2 style={{ fontSize: '24px', marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
-          <HiCloudUpload style={{ fontSize: '28px', marginRight: '12px' }} />
-          邮件上传
-        </h2>
-
-        {/* 消息提示 */}
-        {uploadMessage && (
-          <div className={`message-toast ${uploadSuccess ? 'success' : 'error'}`}>
-            {uploadSuccess ? '✅ ' : '⚠️ '}
-            {uploadMessage}
-          </div>
-        )}
-
-        {/* 文件上传区域 */}
-        <div className="upload-section">
-          <div className="file-input-wrapper">
-            <input
-              type="file"
-              multiple
-              accept=".eml"
-              onChange={handleFileSelect}
-              disabled={uploading}
-              id="file-upload"
-              style={{ display: 'none' }}
-            />
-            <label htmlFor="file-upload" className="file-upload-label">
-              <HiCloudUpload style={{ fontSize: '48px', marginBottom: '12px' }} />
-              <p style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>
-                点击选择EML文件
-              </p>
-              <p style={{ fontSize: '14px', color: '#718096' }}>
-                支持多文件上传
-              </p>
-            </label>
-          </div>
-
-          {/* 已选择的文件 */}
-          {selectedFiles.length > 0 && (
-            <div className="selected-files">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <h3 style={{ fontSize: '16px', margin: 0 }}>
-                  已选择 {selectedFiles.length} 个文件
-                </h3>
-                <button onClick={handleClearSelectedFiles} className="clear-btn">
-                  <HiX /> 清空全部
-                </button>
-              </div>
-              
-              {/* 批次标签输入框 */}
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, marginBottom: '8px', color: '#4a5568' }}>
-                  批次标签 <span style={{ color: '#e53e3e' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  value={batchLabel}
-                  onChange={(e) => setBatchLabel(e.target.value)}
-                  placeholder="邮件主要内容"
-                  disabled={uploading}
-                  required
-                  style={{
-                    width: '100%',
-                    padding: '10px 14px',
-                    border: '2px solid #e2e8f0',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    transition: 'all 0.3s'
-                  }}
-                  onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                  onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
-                />
-                <p style={{ fontSize: '12px', color: '#718096', margin: '6px 0 0 0' }}>
-                  💡 添加标签方便后续查找和管理批次
-                </p>
-              </div>
-              
-              <div className="file-list">
-                {selectedFiles.map((file, index) => (
-                  <div key={index} className="file-item-with-remove">
-                    <span className="file-item-name">📧 {file.name}</span>
-                    <button 
-                      onClick={() => {
-                        setSelectedFiles(prev => prev.filter((_, i) => i !== index))
-                      }}
-                      className="remove-file-btn"
-                    >
-                      <HiX />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <button
-                onClick={handleUpload}
-                disabled={uploading}
-                className="upload-button"
-              >
-                {uploading ? (
-                  <>
-                    <BiLoaderAlt className="spinner" />
-                    上传中... {uploadProgress}%
-                  </>
-                ) : (
-                  <>
-                    <HiCloudUpload />
-                    开始上传
-                  </>
-                )}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* 文件列表 - 三列布局 */}
-        <div className="files-grid">
-          {/* 已上传的文件列表 */}
-          <div className="file-list-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', margin: 0, color: '#2d3748' }}>
-                📂 已上传邮件
-              </h3>
-              <span style={{ fontSize: '14px', color: '#718096', fontWeight: 600 }}>
-                {uploadedFiles.length} 个
-              </span>
-            </div>
-            {uploadedFiles.length > 0 ? (
-              <>
-                <div className="file-list-scroll">
-                  {uploadedFiles.map((filename, index) => (
-                    <div key={index} className="file-item">
-                      <span className="file-name">📧 {filename}</span>
-                      <button
-                        onClick={() => handleDeleteFile(filename)}
-                        className="file-delete-btn"
-                        title="删除"
-                      >
-                        <HiTrash />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={handleClearAllUploaded} className="clear-btn">
-                  <HiTrash /> 清空全部
-                </button>
-              </>
-            ) : (
-              <div className="empty-state">暂无文件</div>
-            )}
-          </div>
-
-          {/* 已去重的文件列表 */}
-          <div className="file-list-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', margin: 0, color: '#2d3748' }}>
-                ✅ 已去重邮件
-              </h3>
-              <span style={{ fontSize: '14px', color: '#718096', fontWeight: 600 }}>
-                {processedFiles.length} 个
-              </span>
-            </div>
-            {processedFiles.length > 0 ? (
-              <>
-                <div className="file-list-scroll">
-                  {processedFiles.map((filename, index) => (
-                    <div key={index} className="file-item">
-                      <span className="file-name">📄 {filename}</span>
-                      <button
-                        onClick={() => handleDeleteProcessed(filename)}
-                        className="file-delete-btn"
-                        title="删除"
-                      >
-                        <HiTrash />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={handleClearAllProcessed} className="clear-btn">
-                  <HiTrash /> 清空全部
-                </button>
-              </>
-            ) : (
-              <div className="empty-state">暂无文件</div>
-            )}
-          </div>
-
-          {/* LLM处理的文件列表 */}
-          <div className="file-list-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', margin: 0, color: '#2d3748' }}>
-                🤖 LLM处理
-              </h3>
-              <span style={{ fontSize: '14px', color: '#718096', fontWeight: 600 }}>
-                {llmProcessedFiles.length} 个
-              </span>
-            </div>
-            {llmProcessedFiles.length > 0 ? (
-              <>
-                <div className="file-list-scroll">
-                  {llmProcessedFiles.map((filename, index) => (
-                    <div key={index} className="file-item">
-                      <span className="file-name">✨ {filename}</span>
-                      <button
-                        onClick={() => handleDeleteLlmProcessed(filename)}
-                        className="file-delete-btn"
-                        title="删除"
-                      >
-                        <HiTrash />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={handleClearAllLlmProcessed} className="clear-btn">
-                  <HiTrash /> 清空全部
-                </button>
-              </>
-            ) : (
-              <div className="empty-state">暂无文件</div>
-            )}
-          </div>
-        </div>
-
-        {/* 下一步按钮 */}
-        {(uploadedFiles.length > 0 || batches.length > 0) && (
-          <button
-            onClick={handleProceedToConfig}
-            className="proceed-button"
-            style={{ marginTop: '30px' }}
-          >
-            下一步：配置处理参数 →
-          </button>
-        )}
-
-        <style jsx>{`
-          .auto-pipeline-container {
-            padding: 30px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-          }
-
-          .upload-section {
-            background: #f8f9fa;
-            padding: 25px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-          }
-
-          .file-input-wrapper {
-            margin-bottom: 20px;
-          }
-
-          .file-upload-label {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 30px 40px;
-            border: 2px dashed #cbd5e0;
-            border-radius: 12px;
-            background: white;
-            cursor: pointer;
-            transition: all 0.3s;
-            color: #667eea;
-          }
-
-          .file-upload-label:hover {
-            border-color: #667eea;
-            background: #f7fafc;
-          }
-
-          .selected-files {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-          }
-
-          .file-list {
-            max-height: 400px;
-            overflow-y: auto;
-            margin-bottom: 16px;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 8px;
-          }
-
-          .file-item {
-            padding: 10px 12px;
-            background: #f7fafc;
-            border-radius: 6px;
-            margin-bottom: 8px;
-            font-size: 14px;
-            color: #4a5568;
-          }
-
-          .file-item-with-remove {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 14px;
-            background: #f7fafc;
-            border-radius: 6px;
-            margin-bottom: 8px;
-            font-size: 14px;
-            color: #4a5568;
-            transition: all 0.2s;
-          }
-
-          .file-item-with-remove:hover {
-            background: #edf2f7;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-          }
-
-          .file-item-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            margin-right: 12px;
-          }
-
-          .remove-file-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            padding: 0;
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            cursor: pointer;
-            color: #718096;
-            transition: all 0.2s;
-            flex-shrink: 0;
-          }
-
-          .remove-file-btn:hover {
-            background: #fc8181;
-            border-color: #fc8181;
-            color: white;
-          }
-
-          .clear-btn {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            background: #fee;
-            color: #c53030;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s;
-          }
-
-          .clear-btn:hover {
-            background: #fed7d7;
-          }
-
-          .clear-all-btn {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            background: #fee;
-            color: #c53030;
-            border: 1px solid #fc8181;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-          }
-
-          .clear-all-btn:hover {
-            background: #fc8181;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(252, 129, 129, 0.3);
-          }
-
-          .upload-button {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            transition: all 0.3s;
-          }
-
-          .upload-button:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
-          }
-
-          .upload-button:disabled {
-            opacity: 0.7;
-            cursor: not-allowed;
-          }
-
-          .uploaded-files-section {
-            background: #f8f9fa;
-            padding: 25px;
-            border-radius: 10px;
-          }
-
-          .uploaded-file-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-bottom: 20px;
-            max-height: 500px;
-            overflow-y: auto;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 10px;
-            background: white;
-          }
-
-          .uploaded-file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 16px;
-            background: white;
-            border-radius: 8px;
-            transition: all 0.3s;
-          }
-
-          .uploaded-file-item:hover {
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-          }
-
-          .file-name {
-            font-size: 14px;
-            color: #2d3748;
-          }
-
-          .delete-btn {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            background: #fee;
-            color: #c53030;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.3s;
-          }
-
-          .delete-btn:hover {
-            background: #fc8181;
-            color: white;
-          }
-
-          .proceed-button {
-            width: 100%;
-            padding: 16px;
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-          }
-
-          .proceed-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(72, 187, 120, 0.4);
-          }
-
-          .spinner {
-            animation: spin 1s linear infinite;
-          }
-
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-
-          /* 三列文件列表布局 */
-          .files-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            margin-top: 30px;
-          }
-
-          .file-list-card {
-            background: #f8f9fa;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 500px;
-          }
-
-          .file-list-scroll {
-            flex: 1;
-            overflow-y: auto;
-            margin-bottom: 12px;
-            padding-right: 8px;
-          }
-
-          .file-list-scroll::-webkit-scrollbar {
-            width: 6px;
-          }
-
-          .file-list-scroll::-webkit-scrollbar-track {
-            background: #edf2f7;
-            border-radius: 3px;
-          }
-
-          .file-list-scroll::-webkit-scrollbar-thumb {
-            background: #cbd5e0;
-            border-radius: 3px;
-          }
-
-          .file-list-scroll::-webkit-scrollbar-thumb:hover {
-            background: #a0aec0;
-          }
-
-          .file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 12px;
-            background: white;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            font-size: 13px;
-            transition: all 0.2s;
-            border: 1px solid transparent;
-          }
-
-          .file-item:hover {
-            border-color: #667eea;
-            box-shadow: 0 2px 6px rgba(102, 126, 234, 0.15);
-          }
-
-          .file-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            margin-right: 8px;
-            color: #4a5568;
-          }
-
-          .file-delete-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            padding: 0;
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.2s;
-            color: #e53e3e;
-            font-size: 14px;
-          }
-
-          .file-delete-btn:hover {
-            background: #fff5f5;
-            border-color: #fc8181;
-            transform: scale(1.05);
-          }
-
-          .clear-btn {
-            width: 100%;
-            padding: 10px;
-            background: #fff;
-            color: #e53e3e;
-            border: 1px solid #e53e3e;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            transition: all 0.2s;
-          }
-
-          .clear-btn:hover {
-            background: #fff5f5;
-            border-color: #fc8181;
-          }
-
-          .empty-state {
-            padding: 40px 20px;
-            text-align: center;
-            color: #a0aec0;
-            font-size: 14px;
-          }
-
-          @media (max-width: 1200px) {
-            .files-grid {
-              grid-template-columns: 1fr;
-            }
-            
-            .file-list-card {
-              height: 350px;
-            }
-          }
-
-          /* 消息提示框 */
-          .message-toast {
-            position: fixed;
-            top: 80px;
-            right: 30px;
-            padding: 16px 24px;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 500;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-            z-index: 1000;
-            animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s forwards;
-            max-width: 400px;
-            word-wrap: break-word;
-          }
-
-          .message-toast.success {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-          }
-
-          .message-toast.error {
-            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
-            color: white;
-          }
-
-          @keyframes slideIn {
-            from {
-              transform: translateX(400px);
-              opacity: 0;
-            }
-            to {
-              transform: translateX(0);
-              opacity: 1;
-            }
-          }
-
-          @keyframes fadeOut {
-            from {
-              opacity: 1;
-            }
-            to {
-              opacity: 0;
-              transform: translateX(400px);
-            }
-          }
-        `}</style>
-      </div>
-    )
-  }
-
   // 配置视图
   if (activeView === 'config') {
     return (
       <div className="auto-pipeline-container">
-        {/* 处理中的提示 */}
-        {running && (
-          <div style={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
-            padding: '16px 20px',
-            borderRadius: '12px',
-            marginBottom: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)'
-          }}>
-            <BiLoaderAlt className="spinner" style={{ fontSize: '24px' }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
-                处理正在后台进行中...
-              </div>
-              <div style={{ fontSize: '13px', opacity: 0.9 }}>
-                💡 您可以切换到其他页面，处理不会中断。完成后可返回查看结果。
-              </div>
-            </div>
-          </div>
-        )}
-
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h2 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center' }}>
             <HiCog style={{ fontSize: '28px', marginRight: '12px' }} />
@@ -1367,14 +770,16 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
           </h2>
           <button 
             onClick={() => onNavigate?.('batches')}
+            disabled={running}
             style={{
               padding: '10px 20px',
-              background: '#e2e8f0',
+              background: running ? '#cbd5e0' : '#e2e8f0',
               border: 'none',
               borderRadius: '8px',
-              cursor: 'pointer',
+              cursor: running ? 'not-allowed' : 'pointer',
               fontSize: '14px',
-              fontWeight: 500
+              fontWeight: 500,
+              opacity: running ? 0.5 : 1
             }}
           >
             ← 返回批次管理
@@ -1657,7 +1062,7 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
                   }}
                 >
                   清空
-                </button>
+          </button>
               </div>
             </>
             )
@@ -1666,12 +1071,40 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
 
         {/* LLM配置部分 */}
         <div className="config-section">
-          <h3 style={{ fontSize: '20px', marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
-            <HiCog style={{ fontSize: '24px', marginRight: '12px' }} />
+          <h3 
+            style={{ 
+              fontSize: '18px', 
+              marginBottom: showLlmConfig ? '20px' : '0', 
+              display: 'flex', 
+              alignItems: 'center',
+              cursor: 'pointer',
+              padding: '12px 16px',
+              background: '#f7fafc',
+              borderRadius: '8px',
+              transition: 'all 0.3s'
+            }}
+            onClick={() => setShowLlmConfig(!showLlmConfig)}
+          >
+            <HiCog style={{ fontSize: '22px', marginRight: '12px' }} />
             1️⃣ LLM邮件清洗配置
+            <span style={{ 
+              marginLeft: 'auto', 
+              fontSize: '14px', 
+              color: '#718096',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              {!showLlmConfig && envConfig && (
+                <span style={{ fontSize: '12px', color: '#48bb78' }}>
+                  ✅ 使用环境变量配置
+                </span>
+              )}
+              <span>{showLlmConfig ? '▼' : '▶'}</span>
+            </span>
           </h3>
         
-        {loadingConfig ? (
+        {showLlmConfig && (loadingConfig ? (
           <div style={{ textAlign: 'center', padding: '40px' }}>
             <BiLoaderAlt className="spinner" style={{ fontSize: '32px', color: '#667eea' }} />
             <p style={{ marginTop: '16px', color: '#718096' }}>加载配置中...</p>
@@ -1754,6 +1187,92 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
               </div>
             )}
           </>
+        ) : envConfigError ? (
+          <div style={{
+            padding: '24px',
+            borderRadius: '16px',
+            background: 'rgba(239, 68, 68, 0.1)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            border: '2px solid rgba(239, 68, 68, 0.3)',
+            boxShadow: '0 8px 32px rgba(239, 68, 68, 0.15)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+              <span style={{ fontSize: '32px' }}>❌</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ 
+                  fontSize: '18px', 
+                  fontWeight: 700,
+                  backgroundImage: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                  marginBottom: '12px'
+                }}>
+                  无法加载环境配置
+                </div>
+                <div style={{
+                  padding: '16px',
+                  background: 'rgba(255, 255, 255, 0.8)',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  marginBottom: '16px',
+                  maxHeight: '300px',
+                  overflowY: 'auto'
+                }}>
+                  <pre style={{ 
+                    margin: 0,
+                    fontSize: '13px',
+                    color: '#991b1b',
+                    fontFamily: 'monospace',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word'
+                  }}>
+                    {envConfigError}
+                  </pre>
+                </div>
+                <div style={{ 
+                  fontSize: '14px', 
+                  color: '#991b1b',
+                  background: 'rgba(254, 226, 226, 0.5)',
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(239, 68, 68, 0.2)'
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: '8px' }}>💡 解决步骤：</div>
+                  <ol style={{ margin: 0, paddingLeft: '20px' }}>
+                    <li>确认 .env 文件在项目根目录</li>
+                    <li>检查文件编码为UTF-8（无BOM）</li>
+                    <li>确认后端服务在项目根目录启动</li>
+                    <li>查看后端日志: logs/api_server.log</li>
+                  </ol>
+                  <div style={{ marginTop: '12px', fontSize: '13px' }}>
+                    📖 详细排查指南请查看: <strong>Windows部署故障排除指南.md</strong>
+                  </div>
+                </div>
+                <button
+                  onClick={() => fetchEnvConfig()}
+                  style={{
+                    marginTop: '16px',
+                    padding: '10px 20px',
+                    background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)',
+                    transition: 'all 0.3s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+                  onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+                >
+                  🔄 重新加载配置
+                </button>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="error-card">
             <p>❌ 无法加载环境配置</p>
@@ -1761,17 +1280,45 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
               请确保 .env 文件存在并包含正确的配置
             </p>
           </div>
-        )}
+        ))}
       </div>
 
       {/* 知识库配置部分 */}
       <div className="config-section" style={{ marginTop: '20px' }}>
-        <h3 style={{ fontSize: '20px', marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
-          <HiCog style={{ fontSize: '24px', marginRight: '12px' }} />
+        <h3 
+          style={{ 
+            fontSize: '18px', 
+            marginBottom: showKbConfig ? '20px' : '0', 
+            display: 'flex', 
+            alignItems: 'center',
+            cursor: 'pointer',
+            padding: '12px 16px',
+            background: '#f7fafc',
+            borderRadius: '8px',
+            transition: 'all 0.3s'
+          }}
+          onClick={() => setShowKbConfig(!showKbConfig)}
+        >
+          <HiCog style={{ fontSize: '22px', marginRight: '12px' }} />
           2️⃣ 知识库上传配置
+          <span style={{ 
+            marginLeft: 'auto', 
+            fontSize: '14px', 
+            color: '#718096',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            {!showKbConfig && envConfig && (
+              <span style={{ fontSize: '12px', color: '#48bb78' }}>
+                ✅ 使用环境变量配置
+              </span>
+            )}
+            <span>{showKbConfig ? '▼' : '▶'}</span>
+          </span>
         </h3>
         
-        {loadingConfig ? (
+        {showKbConfig && (loadingConfig ? (
           <div style={{ textAlign: 'center', padding: '40px' }}>
             <BiLoaderAlt className="spinner" style={{ fontSize: '32px', color: '#667eea' }} />
             <p style={{ marginTop: '16px', color: '#718096' }}>加载配置中...</p>
@@ -2000,8 +1547,129 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
               请确保 .env 文件存在并包含正确的配置
             </p>
           </div>
-        )}
+        ))}
       </div>
+
+      {/* iOS风格毛玻璃知识库选择区域 */}
+      {!showKbConfig && envConfig && envConfig.kb_api_keys && knowledgeBases.length > 0 && (
+        <div className="config-section" style={{ 
+          marginTop: '20px',
+          position: 'relative',
+          borderRadius: '16px',
+          padding: '28px',
+          background: 'rgba(255, 255, 255, 0.7)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+          border: '1px solid rgba(255, 255, 255, 0.5)',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
+          overflow: 'hidden'
+        }}>
+          {/* 背景装饰 */}
+          <div style={{
+            position: 'absolute',
+            top: '-50%',
+            right: '-10%',
+            width: '200px',
+            height: '200px',
+            background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%)',
+            borderRadius: '50%',
+            filter: 'blur(40px)',
+            pointerEvents: 'none'
+          }} />
+          <div style={{
+            position: 'absolute',
+            bottom: '-30%',
+            left: '-5%',
+            width: '150px',
+            height: '150px',
+            background: 'linear-gradient(135deg, rgba(118, 75, 162, 0.15) 0%, rgba(102, 126, 234, 0.15) 100%)',
+            borderRadius: '50%',
+            filter: 'blur(40px)',
+            pointerEvents: 'none'
+          }} />
+          
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <label style={{ 
+              color: '#1a202c',
+              fontSize: '18px',
+              fontWeight: 700,
+              marginBottom: '14px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              <span style={{
+                backgroundImage: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                fontSize: '20px'
+              }}>
+                ⭐
+              </span>
+              <span style={{
+                backgroundImage: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text'
+              }}>
+                选择目标知识库
+              </span>
+              <span style={{ color: '#e53e3e', fontSize: '16px' }}>*</span>
+            </label>
+            <select
+              value={config.selectedKnowledgeBase}
+              onChange={(e) => setConfig(prev => ({
+                ...prev,
+                selectedKnowledgeBase: e.target.value
+              }))}
+              disabled={running}
+              style={{
+                width: '100%',
+                padding: '16px 18px',
+                border: '2px solid rgba(102, 126, 234, 0.2)',
+                borderRadius: '12px',
+                fontSize: '16px',
+                background: 'rgba(255, 255, 255, 0.9)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                cursor: running ? 'not-allowed' : 'pointer',
+                fontWeight: 600,
+                color: '#2d3748',
+                boxShadow: '0 4px 16px rgba(102, 126, 234, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
+                transition: 'all 0.3s ease',
+                outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = 'rgba(102, 126, 234, 0.6)'
+                e.target.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = 'rgba(102, 126, 234, 0.2)'
+                e.target.style.boxShadow = '0 4px 16px rgba(102, 126, 234, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
+              }}
+            >
+              {knowledgeBases.map((kb: any) => (
+                <option key={kb.id} value={kb.id}>
+                  {kb.name} ({kb.doc_count} 个文档)
+                </option>
+              ))}
+            </select>
+            <p style={{ 
+              color: '#718096', 
+              fontSize: '13px', 
+              marginTop: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontWeight: 500
+            }}>
+              <span>💡</span>
+              <span>清洗后的邮件将上传到此知识库</span>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 开始处理按钮 */}
       {envConfig && !loadingConfig && knowledgeBases.length > 0 && (
@@ -2047,12 +1715,144 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${progress}%` }}></div>
           </div>
+          
+          {/* 预计剩余时间 - iOS毛玻璃风格 */}
+          {estimatedTime > 0 && (
+            <div style={{
+              marginTop: '20px',
+              padding: '20px 24px',
+              borderRadius: '16px',
+              background: remainingTime <= 0 
+                ? 'rgba(72, 187, 120, 0.1)' 
+                : 'rgba(102, 126, 234, 0.1)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+              border: remainingTime <= 0 
+                ? '2px solid rgba(72, 187, 120, 0.3)' 
+                : '2px solid rgba(102, 126, 234, 0.3)',
+              boxShadow: remainingTime <= 0
+                ? '0 8px 32px rgba(72, 187, 120, 0.15)'
+                : '0 8px 32px rgba(102, 126, 234, 0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              transition: 'all 0.5s ease'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <HiClock style={{ 
+                  fontSize: '24px', 
+                  color: remainingTime <= 0 ? '#38a169' : '#667eea'
+                }} />
+                <div>
+                  <div style={{ 
+                    fontSize: '13px', 
+                    color: '#718096',
+                    fontWeight: 500,
+                    marginBottom: '4px'
+                  }}>
+                    {remainingTime <= 0 ? '处理即将完成' : '预计剩余时间'}
+                  </div>
+                  <div style={{ 
+                    fontSize: '24px', 
+                    fontWeight: 700,
+                    backgroundImage: remainingTime <= 0
+                      ? 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)'
+                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text'
+                  }}>
+                    {formatTime(remainingTime)}
+                  </div>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ 
+                  fontSize: '12px', 
+                  color: '#a0aec0',
+                  marginBottom: '4px'
+                }}>
+                  总文件数
+                </div>
+                <div style={{ 
+                  fontSize: '20px', 
+                  fontWeight: 700,
+                  color: '#4a5568'
+                }}>
+                  {totalFilesToProcess}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {logs.length > 0 && (
         <div className="logs-section">
           <h3 style={{ fontSize: '16px', marginBottom: '10px' }}>📋 执行日志</h3>
+          
+          {/* 全局重复邮件提示 - iOS毛玻璃风格 */}
+          {globalDuplicates.length > 0 && (
+            <div style={{
+              marginBottom: '16px',
+              padding: '20px 24px',
+              borderRadius: '16px',
+              background: 'rgba(251, 191, 36, 0.1)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+              border: '2px solid rgba(251, 191, 36, 0.3)',
+              boxShadow: '0 8px 32px rgba(251, 191, 36, 0.15)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '24px' }}>🔄</span>
+                <div>
+                  <div style={{ 
+                    fontSize: '16px', 
+                    fontWeight: 700,
+                    backgroundImage: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text',
+                    marginBottom: '4px'
+                  }}>
+                    检测到跨批次重复邮件
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#92400e' }}>
+                    共 {globalDuplicates.length} 个邮件在其他批次中已处理，已自动跳过
+                  </div>
+                </div>
+              </div>
+              <div style={{ 
+                maxHeight: '200px', 
+                overflowY: 'auto',
+                padding: '12px',
+                background: 'rgba(255, 255, 255, 0.6)',
+                borderRadius: '10px',
+                border: '1px solid rgba(251, 191, 36, 0.2)'
+              }}>
+                {globalDuplicates.map((dup, index) => (
+                  <div key={index} style={{
+                    padding: '10px 12px',
+                    marginBottom: '8px',
+                    background: 'rgba(255, 255, 255, 0.8)',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    color: '#78350f',
+                    border: '1px solid rgba(251, 191, 36, 0.2)'
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                      📧 {dup.file_name}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#92400e' }}>
+                      已在批次 <span style={{ fontWeight: 600 }}>{dup.previous_batch}</span> 中处理
+                      （{new Date(dup.previous_time).toLocaleString('zh-CN')}）
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div className="logs-container">
             {logs.map((log, index) => (
               <div key={index} className="log-item">{log}</div>
@@ -2441,14 +2241,14 @@ export default function AutoPipeline({ onNavigate }: AutoPipelineProps) {
             <div style={{ display: 'flex', gap: '16px' }}>
               <button
                 onClick={() => {
-                  // 重置状态，准备处理更多邮件
-                  setCurrentView('upload')
+                  // 重置状态，返回配置页面准备处理更多邮件
+                  setCurrentView('config')
                   setProgress(0)
                   setLogs([])
                   setCurrentStep('')
                   setProcessingResult(null)
-                  setSelectedFiles([])
-                  fetchUploadedFiles()
+                  setSelectedBatchIds([])  // 清空选中的批次
+                  fetchBatches()  // 刷新批次列表
                 }}
                 className="action-button primary-button"
               >

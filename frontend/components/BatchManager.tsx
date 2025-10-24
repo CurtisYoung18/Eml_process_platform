@@ -3,6 +3,17 @@ import { HiClock, HiCheckCircle, HiTrash, HiRefresh, HiFolderOpen, HiDocumentTex
 import { BiLoaderAlt } from 'react-icons/bi'
 import axios from 'axios'
 
+// 动态获取API基础URL
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    return `http://${hostname}:5001`
+  }
+  return 'http://localhost:5001'
+}
+
+const API_BASE_URL = getApiBaseUrl()
+
 export default function BatchManager() {
   const [batches, setBatches] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -17,12 +28,23 @@ export default function BatchManager() {
   const [batchLabel, setBatchLabel] = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [duplicateFiles, setDuplicateFiles] = useState<Set<string>>(new Set()) // 重复文件名集合
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false)
   
   // 知识库标签相关状态
   const [showKbLabelModal, setShowKbLabelModal] = useState(false)
   const [kbLabelBatchId, setKbLabelBatchId] = useState('')
   const [kbName, setKbName] = useState('')
   const [savingKbLabel, setSavingKbLabel] = useState(false)
+  
+  // 批次标签编辑相关状态
+  const [showEditLabelModal, setShowEditLabelModal] = useState(false)
+  const [editLabelBatchId, setEditLabelBatchId] = useState('')
+  const [editLabel, setEditLabel] = useState('')
+  const [savingLabel, setSavingLabel] = useState(false)
+  
+  // 隐藏已完成批次（默认开启）
+  const [hideCompletedBatches, setHideCompletedBatches] = useState(true)
 
   useEffect(() => {
     fetchBatches()
@@ -31,7 +53,7 @@ export default function BatchManager() {
   const fetchBatches = async () => {
     setLoading(true)
     try {
-      const response = await axios.get('http://localhost:5001/api/batches')
+      const response = await axios.get(`${API_BASE_URL}/api/batches`)
       if (response.data.success) {
         setBatches(response.data.batches)
       }
@@ -47,7 +69,7 @@ export default function BatchManager() {
     try {
       // URL 编码批次ID
       const encodedBatchId = encodeURIComponent(batchId)
-      const response = await axios.get(`http://localhost:5001/api/batches/${encodedBatchId}`)
+      const response = await axios.get(`${API_BASE_URL}/api/batches/${encodedBatchId}`)
       if (response.data.success) {
         setSelectedBatch(response.data.batch)
         setShowDetails(true)
@@ -68,7 +90,7 @@ export default function BatchManager() {
     try {
       // URL 编码批次ID
       const encodedBatchId = encodeURIComponent(batchId)
-      const response = await axios.delete(`http://localhost:5001/api/batches/${encodedBatchId}`)
+      const response = await axios.delete(`${API_BASE_URL}/api/batches/${encodedBatchId}`)
       if (response.data.success) {
         showMessage('批次已删除', 'success')
         // 立即从本地状态中移除该批次
@@ -88,15 +110,43 @@ export default function BatchManager() {
     }
   }
 
-  const showMessage = (msg: string, type: 'success' | 'error') => {
+  const showMessage = (msg: string, type: 'success' | 'error' | 'warning') => {
     setMessage(msg)
-    setMessageType(type)
-    setTimeout(() => setMessage(''), 3000)
+    setMessageType(type as 'success' | 'error')
+    setTimeout(() => setMessage(''), type === 'warning' ? 5000 : 3000)
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      setSelectedFiles(Array.from(e.target.files))
+      const newFiles = Array.from(e.target.files)
+      // 追加新文件，而不是替换
+      setSelectedFiles(prev => [...prev, ...newFiles])
+      
+      // 检查重复文件
+      await checkDuplicateFiles([...selectedFiles, ...newFiles])
+    }
+  }
+
+  // 检查哪些文件是重复的
+  const checkDuplicateFiles = async (files: File[]) => {
+    if (files.length === 0) return
+    
+    setCheckingDuplicates(true)
+    try {
+      // 从后端获取全局已处理邮件列表
+      const response = await axios.get(`${API_BASE_URL}/api/check-duplicates`, {
+        params: {
+          filenames: files.map(f => f.name).join(',')
+        }
+      })
+      
+      if (response.data.success) {
+        setDuplicateFiles(new Set(response.data.duplicates || []))
+      }
+    } catch (error) {
+      console.error('检查重复文件失败:', error)
+    } finally {
+      setCheckingDuplicates(false)
     }
   }
 
@@ -124,7 +174,7 @@ export default function BatchManager() {
     formData.append('label', batchLabel.trim())
 
     try {
-      const response = await axios.post('http://localhost:5001/api/upload', formData, {
+      const response = await axios.post(`${API_BASE_URL}/api/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         },
@@ -137,14 +187,20 @@ export default function BatchManager() {
       })
 
       if (response.data.success) {
-        showMessage(`成功创建批次！已上传 ${response.data.count} 个文件`, 'success')
+        const uploadedCount = response.data.count
+        const skippedCount = response.data.duplicate_count || 0
+        
+        showMessage(`成功创建批次！已上传 ${uploadedCount} 个文件` + 
+          (skippedCount > 0 ? `，跳过 ${skippedCount} 个已处理的文件` : ''), 'success')
+        
         setSelectedFiles([])
         setBatchLabel('')
+        setDuplicateFiles(new Set())
         setShowUploadModal(false)
         fetchBatches()
       }
     } catch (error: any) {
-      showMessage(`上传失败: ${error.message}`, 'error')
+      showMessage(`上传失败: ${error.response?.data?.error || error.message}`, 'error')
     } finally {
       setUploading(false)
       setUploadProgress(0)
@@ -157,6 +213,51 @@ export default function BatchManager() {
     setShowKbLabelModal(true)
   }
 
+  const openEditLabelModal = (batchId: string, currentLabel: string) => {
+    setEditLabelBatchId(batchId)
+    setEditLabel(currentLabel)
+    setShowEditLabelModal(true)
+  }
+
+  const saveEditLabel = async () => {
+    if (!editLabel.trim()) {
+      showMessage('批次标签不能为空', 'error')
+      return
+    }
+
+    setSavingLabel(true)
+    try {
+      const encodedBatchId = encodeURIComponent(editLabelBatchId)
+      
+      const response = await axios.put(
+        `${API_BASE_URL}/api/batches/${encodedBatchId}/label`,
+        { custom_label: editLabel.trim() }
+      )
+
+      if (response.data.success) {
+        showMessage('批次标签已更新', 'success')
+        setShowEditLabelModal(false)
+        
+        // 更新本地状态
+        if (selectedBatch && selectedBatch.batch_id === editLabelBatchId) {
+          setSelectedBatch({
+            ...selectedBatch,
+            custom_label: editLabel.trim()
+          })
+        }
+        
+        // 刷新批次列表
+        fetchBatches()
+      } else {
+        showMessage(response.data.error || '更新批次标签失败', 'error')
+      }
+    } catch (error: any) {
+      showMessage(`更新失败: ${error.message}`, 'error')
+    } finally {
+      setSavingLabel(false)
+    }
+  }
+
   const saveKbLabel = async () => {
     if (!kbName.trim()) {
       showMessage('请输入知识库名称', 'error')
@@ -167,7 +268,7 @@ export default function BatchManager() {
     try {
       const encodedBatchId = encodeURIComponent(kbLabelBatchId)
       const response = await axios.put(
-        `http://localhost:5001/api/batches/${encodedBatchId}/kb-label`,
+        `${API_BASE_URL}/api/batches/${encodedBatchId}/kb-label`,
         { kb_name: kbName.trim() }
       )
 
@@ -577,6 +678,55 @@ export default function BatchManager() {
           </button>
         </div>
 
+        {/* 过滤选项 - 与配置页面风格一致 */}
+        <div style={{ 
+          marginBottom: '20px', 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between',
+          padding: '14px 20px',
+          background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%)',
+          borderRadius: '12px',
+          border: '1px solid rgba(102, 126, 234, 0.15)',
+          boxShadow: '0 2px 8px rgba(102, 126, 234, 0.08)'
+        }}>
+          <label style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '10px',
+            fontSize: '14px',
+            fontWeight: 500,
+            cursor: 'pointer',
+            userSelect: 'none',
+            color: '#4a5568'
+          }}>
+            <input
+              type="checkbox"
+              checked={hideCompletedBatches}
+              onChange={(e) => setHideCompletedBatches(e.target.checked)}
+              style={{ 
+                cursor: 'pointer',
+                width: '16px',
+                height: '16px',
+                accentColor: '#667eea'
+              }}
+            />
+            <span>隐藏已完成的批次</span>
+          </label>
+          <span style={{ 
+            fontSize: '13px', 
+            color: '#667eea',
+            fontWeight: 600,
+            background: 'rgba(102, 126, 234, 0.1)',
+            padding: '4px 12px',
+            borderRadius: '12px'
+          }}>
+            显示 {hideCompletedBatches 
+              ? batches.filter(b => !b.status?.uploaded_to_kb).length 
+              : batches.length} / {batches.length}
+          </span>
+        </div>
+
         <div className="content">
           {loading ? (
             <div style={{ textAlign: 'center', padding: '60px' }}>
@@ -593,7 +743,9 @@ export default function BatchManager() {
             </div>
           ) : (
             <div className="batch-grid">
-              {batches.map((batch) => (
+              {batches
+                .filter(batch => !hideCompletedBatches || !batch.status?.uploaded_to_kb)
+                .map((batch) => (
                 <div
                   key={batch.batch_id}
                   className="batch-card"
@@ -714,31 +866,29 @@ export default function BatchManager() {
                   )}
 
                   <div style={{ marginTop: '16px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                    {batch.kb_name && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openKbLabelModal(batch.batch_id, batch.kb_name)
-                        }}
-                        style={{
-                          padding: '8px 12px',
-                          background: '#e6f7ff',
-                          border: '1px solid #91d5ff',
-                          color: '#0050b3',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          transition: 'all 0.3s'
-                        }}
-                      >
-                        <HiCloudUpload />
-                        修改标签
-                      </button>
-                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openEditLabelModal(batch.batch_id, batch.custom_label)
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        background: '#e6f7ff',
+                        border: '1px solid #91d5ff',
+                        color: '#0050b3',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'all 0.3s'
+                      }}
+                    >
+                      <HiCloudUpload />
+                      编辑标签
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -938,7 +1088,7 @@ export default function BatchManager() {
                   点击选择EML文件
                 </p>
                 <p style={{ fontSize: '14px', color: '#718096' }}>
-                  支持多文件上传
+                  支持多文件上传，可多次选择添加
                 </p>
               </label>
             </div>
@@ -946,11 +1096,28 @@ export default function BatchManager() {
             {selectedFiles.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#4a5568' }}>
-                    已选择 {selectedFiles.length} 个文件
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 600, color: '#4a5568' }}>
+                      已选择 {selectedFiles.length} 个文件
+                    </span>
+                    {duplicateFiles.size > 0 && (
+                      <span style={{ 
+                        fontSize: '13px', 
+                        color: '#d97706',
+                        background: 'rgba(251, 191, 36, 0.1)',
+                        padding: '4px 10px',
+                        borderRadius: '12px',
+                        fontWeight: 600
+                      }}>
+                        检测到 {duplicateFiles.size} 个已处理过的邮件
+                      </span>
+                    )}
+                  </div>
                   <button 
-                    onClick={() => setSelectedFiles([])}
+                    onClick={() => {
+                      setSelectedFiles([])
+                      setDuplicateFiles(new Set())
+                    }}
                     disabled={uploading}
                     style={{
                       background: 'none',
@@ -966,25 +1133,43 @@ export default function BatchManager() {
                   </button>
                 </div>
                 <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
-                  {selectedFiles.map((file, index) => (
+                  {selectedFiles.map((file, index) => {
+                    const isDuplicate = duplicateFiles.has(file.name)
+                    return (
                     <div 
                       key={index} 
                       style={{
                         padding: '8px 12px',
-                        background: '#f7fafc',
+                        background: isDuplicate ? 'rgba(251, 191, 36, 0.08)' : '#f7fafc',
                         borderRadius: '6px',
                         marginBottom: '6px',
                         fontSize: '13px',
-                        color: '#2d3748',
+                        color: isDuplicate ? '#92400e' : '#2d3748',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '8px'
+                        gap: '8px',
+                        border: isDuplicate ? '1px solid rgba(251, 191, 36, 0.3)' : 'none',
+                        position: 'relative'
                       }}
                     >
-                      <HiDocumentText style={{ color: '#667eea' }} />
+                      <HiDocumentText style={{ color: isDuplicate ? '#d97706' : '#667eea' }} />
                       {file.name}
+                      {isDuplicate && (
+                        <span style={{
+                          marginLeft: 'auto',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          color: '#d97706',
+                          background: 'rgba(251, 191, 36, 0.2)',
+                          padding: '2px 8px',
+                          borderRadius: '10px'
+                        }}>
+                          跳过
+                        </span>
+                      )}
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -1148,6 +1333,105 @@ export default function BatchManager() {
                 }}
               >
                 {savingKbLabel ? (
+                  <>
+                    <BiLoaderAlt className="spinner" style={{ fontSize: '16px' }} />
+                    保存中...
+                  </>
+                ) : (
+                  '保存'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑批次标签模态窗口 */}
+      {showEditLabelModal && (
+        <div className="modal" onClick={() => !savingLabel && setShowEditLabelModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h2 className="modal-title">编辑批次标签</h2>
+              <button 
+                onClick={() => setShowEditLabelModal(false)} 
+                className="close-btn"
+                disabled={savingLabel}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, marginBottom: '8px', color: '#4a5568' }}>
+                批次标签 <span style={{ color: '#e53e3e' }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={editLabel}
+                onChange={(e) => setEditLabel(e.target.value)}
+                placeholder="邮件主要内容"
+                disabled={savingLabel}
+                autoFocus
+                style={{
+                  width: '100%',
+                  padding: '12px 14px',
+                  border: '2px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  transition: 'border-color 0.3s'
+                }}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && editLabel.trim()) {
+                    saveEditLabel()
+                  }
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#718096', margin: '8px 0 0 0' }}>
+                💡 修改标签方便后续查找和管理批次
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => setShowEditLabelModal(false)}
+                disabled={savingLabel}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: '#e2e8f0',
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: '#4a5568',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: savingLabel ? 'not-allowed' : 'pointer',
+                  opacity: savingLabel ? 0.5 : 1
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={saveEditLabel}
+                disabled={savingLabel || !editLabel.trim()}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: editLabel.trim() && !savingLabel 
+                    ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' 
+                    : '#cbd5e0',
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: editLabel.trim() && !savingLabel ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
+                }}
+              >
+                {savingLabel ? (
                   <>
                     <BiLoaderAlt className="spinner" style={{ fontSize: '16px' }} />
                     保存中...

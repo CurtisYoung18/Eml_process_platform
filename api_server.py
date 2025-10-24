@@ -11,6 +11,13 @@ import os
 from pathlib import Path
 import glob
 from dotenv import dotenv_values
+import traceback
+import json
+import time
+from datetime import datetime
+import random
+import string
+import shutil
 
 # 导入现有的工具模块
 from tools.utils import count_files, log_activity
@@ -44,11 +51,34 @@ def allowed_file(filename):
 def get_env_config():
     """获取环境变量配置"""
     try:
-        env_path = Path(__file__).parent / '.env'
-        if not env_path.exists():
-            return jsonify({'success': False, 'error': '.env文件不存在'}), 404
+        # 尝试多个可能的.env文件位置
+        possible_paths = [
+            Path(__file__).parent / '.env',  # 与api_server.py同目录
+            Path.cwd() / '.env',  # 当前工作目录
+            Path(__file__).parent.parent / '.env',  # 父目录
+        ]
+        
+        env_path = None
+        for path in possible_paths:
+            log_activity(f"尝试读取.env文件: {path.absolute()}")
+            if path.exists():
+                env_path = path
+                log_activity(f"✅ 找到.env文件: {path.absolute()}")
+                break
+        
+        if not env_path:
+            error_msg = f'.env文件不存在。已尝试的路径:\n' + '\n'.join([f'  - {p.absolute()}' for p in possible_paths])
+            log_activity(f"❌ {error_msg}")
+            return jsonify({
+                'success': False, 
+                'error': '.env文件不存在',
+                'details': error_msg,
+                'cwd': str(Path.cwd().absolute()),
+                'script_dir': str(Path(__file__).parent.absolute())
+            }), 404
         
         env_vars = dotenv_values(env_path)
+        log_activity(f"成功读取.env文件，共{len(env_vars)}个变量")
         
         # 提取LLM API Keys
         llm_keys = []
@@ -81,9 +111,16 @@ def get_env_config():
             'default_kb_key': env_vars.get('GPTBOTS_KB_API_KEY_1', ''),
         }
         
+        log_activity(f"返回配置: {len(llm_keys)}个LLM Keys, {len(kb_keys)}个KB Keys")
         return jsonify({'success': True, 'config': config})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        error_msg = f'读取环境配置异常: {str(e)}'
+        log_activity(error_msg)
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 @app.route('/api/knowledge-bases', methods=['POST'])
@@ -203,6 +240,40 @@ def delete_llm_processed_file(filename):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/check-duplicates', methods=['GET'])
+def check_duplicates():
+    """检查哪些文件是重复的（检查所有已上传的邮件）"""
+    try:
+        filenames_str = request.args.get('filenames', '')
+        if not filenames_str:
+            return jsonify({'success': True, 'duplicates': []})
+        
+        filenames = filenames_str.split(',')
+        
+        # 收集所有批次中已上传的邮件文件名
+        upload_dir = Path(DIRECTORIES["upload_dir"])
+        existing_files = set()
+        
+        # 检查所有批次目录
+        if upload_dir.exists():
+            for batch_dir in upload_dir.iterdir():
+                if batch_dir.is_dir() and batch_dir.name.startswith('batch_'):
+                    # 收集该批次中的所有.eml文件
+                    for eml_file in batch_dir.glob('*.eml'):
+                        existing_files.add(eml_file.name)
+        
+        # 找出重复的文件名（已在其他批次中上传过）
+        duplicates = [fname for fname in filenames if fname in existing_files]
+        
+        return jsonify({
+            'success': True,
+            'duplicates': duplicates
+        })
+    except Exception as e:
+        log_activity(f"检查重复文件异常: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/upload', methods=['POST'])
 def upload_files():
     """上传EML文件 - 自动批次管理"""
@@ -212,26 +283,52 @@ def upload_files():
         
         files = request.files.getlist('files')
         
-        # 生成批次ID (精确到分钟)
-        from datetime import datetime
-        batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M')}"
+        # 生成批次ID (精确到秒 + 随机后缀，确保唯一性)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        batch_id = f"batch_{timestamp}_{random_suffix}"
         
         # 获取必填的批次标签
         batch_label = request.form.get('label', '').strip()
         if not batch_label:
             return jsonify({'success': False, 'error': '批次标签为必填项'}), 400
         
+        # 检查所有批次中已上传的文件
+        upload_dir = Path(UPLOAD_FOLDER)
+        existing_files = {}  # {filename: batch_id}
+        
+        if upload_dir.exists():
+            for existing_batch_dir in upload_dir.iterdir():
+                if existing_batch_dir.is_dir() and existing_batch_dir.name.startswith('batch_'):
+                    # 收集所有已上传的.eml文件
+                    for eml_file in existing_batch_dir.glob('*.eml'):
+                        existing_files[eml_file.name] = existing_batch_dir.name
+        
         # 创建批次目录
         batch_dir = Path(UPLOAD_FOLDER) / batch_id
         batch_dir.mkdir(parents=True, exist_ok=True)
         
-        # 保存文件
+        # 保存文件并检测重复
         uploaded_files = []
         file_details = []
+        duplicate_files = []  # 记录重复的文件
         
         for file in files:
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
+                
+                # 检查是否在其他批次中已存在
+                if filename in existing_files:
+                    previous_batch = existing_files[filename]
+                    duplicate_files.append({
+                        'filename': filename,
+                        'previous_batch': previous_batch,
+                        'previous_time': 'N/A'
+                    })
+                    log_activity(f"⚠️ 跳过重复文件: {filename} (已在批次 {previous_batch} 中上传)")
+                    continue  # 跳过这个文件，不保存
+                
+                # 保存文件
                 filepath = batch_dir / filename
                 file.save(str(filepath))
                 uploaded_files.append(filename)
@@ -264,16 +361,24 @@ def upload_files():
         # 标签和文件数仅存储在元数据中，用于前端展示
         batch_info_file = batch_dir / ".batch_info.json"
         with open(batch_info_file, 'w', encoding='utf-8') as f:
-            import json
             json.dump(batch_info, f, ensure_ascii=False, indent=2)
         
-        log_activity(f"批次创建完成: {batch_id}, {len(uploaded_files)} 个文件")
+        # 即使全部重复也不报错，返回成功（但count为0）
+        if len(uploaded_files) == 0 and len(duplicate_files) > 0:
+            log_activity(f"所有文件都是重复的，批次 {batch_id} 已创建但无新文件")
+        
+        log_activity(f"批次创建完成: {batch_id}, {len(uploaded_files)} 个文件上传成功")
+        if duplicate_files:
+            log_activity(f"跳过 {len(duplicate_files)} 个重复文件")
         
         return jsonify({
             'success': True,
             'batch_id': batch_id,
             'uploaded_files': uploaded_files,
-            'count': len(uploaded_files)
+            'count': len(uploaded_files),
+            'duplicate_files': duplicate_files,
+            'duplicate_count': len(duplicate_files),
+            'message': f'成功上传 {len(uploaded_files)} 个文件' + (f'，跳过 {len(duplicate_files)} 个重复文件' if duplicate_files else '')
         })
     except Exception as e:
         log_activity(f"上传失败: {str(e)}")
@@ -837,11 +942,19 @@ def auto_clean():
             processed_count = report.get('unique_emails', len(result.get('generated_files', [])))
             log_activity(f"邮件清洗完成: {processed_count} 个文件")
             
+            # 记录全局去重信息
+            global_duplicates = report.get('all_global_duplicates', [])
+            if global_duplicates:
+                log_activity(f"检测到 {len(global_duplicates)} 个跨批次重复邮件，已自动跳过")
+                for dup in global_duplicates:
+                    log_activity(f"  - {dup['file_name']} (已在批次 {dup['previous_batch']} 中处理)")
+            
             return jsonify({
                 'success': True,
                 'processed_count': processed_count,
                 'total_files': report.get('total_input_files', 0),
                 'duplicates': report.get('duplicate_emails', 0),
+                'global_duplicates': global_duplicates,
                 'message': '邮件清洗完成'
             })
         else:
@@ -1170,10 +1283,67 @@ def auto_upload_kb():
                     failed_uploads += 1
                     log_activity(f"上传异常 {md_file.name}: {str(e)}")
             
-            # 更新批次状态
+            # 更新批次状态 - 标记为已上传并添加知识库名称标签
             if batch_ids and successful_uploads > 0:
+                # 获取知识库名称
+                kb_name = None
+                try:
+                    log_activity(f"正在获取知识库名称，KB ID: {kb_id}")
+                    kb_response = kb_client.get_knowledge_bases()
+                    log_activity(f"知识库API响应: {kb_response}")
+                    
+                    # 尝试多种可能的响应结构
+                    kb_list = None
+                    if kb_response:
+                        # 格式1: {'data': {'list': [...]}}
+                        if 'data' in kb_response and isinstance(kb_response['data'], dict) and 'list' in kb_response['data']:
+                            kb_list = kb_response['data']['list']
+                        # 格式2: {'data': [...]}
+                        elif 'data' in kb_response and isinstance(kb_response['data'], list):
+                            kb_list = kb_response['data']
+                        # 格式3: {'knowledge_base': [...]}
+                        elif 'knowledge_base' in kb_response and isinstance(kb_response['knowledge_base'], list):
+                            kb_list = kb_response['knowledge_base']
+                        # 格式4: 直接是列表
+                        elif isinstance(kb_response, list):
+                            kb_list = kb_response
+                    
+                    if kb_list:
+                        log_activity(f"找到 {len(kb_list)} 个知识库")
+                        for kb in kb_list:
+                            if kb.get('id') == kb_id:
+                                kb_name = kb.get('name', '')
+                                log_activity(f"匹配到知识库: {kb_name}")
+                                break
+                    else:
+                        log_activity(f"无法从响应中解析知识库列表")
+                        
+                except Exception as e:
+                    log_activity(f"获取知识库名称失败: {str(e)}")
+                
                 for batch_id in batch_ids:
                     update_batch_status_file(batch_id, 'uploaded_to_kb', True)
+                    # 如果成功获取知识库名称，保存到批次元数据
+                    if kb_name:
+                        upload_dir = Path(DIRECTORIES["upload_dir"])
+                        batch_dir = upload_dir / batch_id
+                        batch_info_file = batch_dir / ".batch_info.json"
+                        
+                        if batch_info_file.exists():
+                            try:
+                                with open(batch_info_file, 'r', encoding='utf-8') as f:
+                                    batch_info = json.load(f)
+                                
+                                batch_info['kb_name'] = kb_name
+                                
+                                with open(batch_info_file, 'w', encoding='utf-8') as f:
+                                    json.dump(batch_info, f, ensure_ascii=False, indent=2)
+                                
+                                log_activity(f"批次 {batch_id} 已自动标记知识库: {kb_name}")
+                            except Exception as e:
+                                log_activity(f"保存知识库名称到批次 {batch_id} 失败: {str(e)}")
+                    else:
+                        log_activity(f"警告: 未能获取知识库名称，批次 {batch_id} 需要手动添加标签")
             
             if successful_uploads > 0:
                 return jsonify({
@@ -1345,6 +1515,56 @@ def update_batch_status(batch_id):
         
         return jsonify({'success': True, 'batch_info': batch_info})
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/batches/<path:batch_id>/label', methods=['PUT'])
+def update_batch_label(batch_id):
+    """更新批次的自定义标签"""
+    try:
+        from urllib.parse import unquote
+        import json
+        
+        # URL 解码批次ID
+        batch_id = unquote(batch_id)
+        
+        data = request.json
+        custom_label = data.get('custom_label', '').strip()
+        
+        if not custom_label:
+            return jsonify({'success': False, 'error': '批次标签不能为空'}), 400
+        
+        upload_dir = Path(DIRECTORIES["upload_dir"])
+        batch_dir = upload_dir / batch_id
+        
+        if not batch_dir.exists():
+            return jsonify({'success': False, 'error': '批次不存在'}), 404
+        
+        batch_info_file = batch_dir / ".batch_info.json"
+        if not batch_info_file.exists():
+            return jsonify({'success': False, 'error': '批次元数据不存在'}), 404
+        
+        # 读取并更新元数据
+        with open(batch_info_file, 'r', encoding='utf-8') as f:
+            batch_info = json.load(f)
+        
+        # 更新自定义标签
+        batch_info['custom_label'] = custom_label
+        
+        # 保存更新后的元数据
+        with open(batch_info_file, 'w', encoding='utf-8') as f:
+            json.dump(batch_info, f, ensure_ascii=False, indent=2)
+        
+        log_activity(f"批次 {batch_id} 标签已更新为: {custom_label}")
+        
+        return jsonify({
+            'success': True,
+            'message': '批次标签更新成功',
+            'custom_label': custom_label
+        })
+        
+    except Exception as e:
+        log_activity(f"更新批次标签失败: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

@@ -34,6 +34,29 @@ class EmailCleaner:
         self.processed_emails = []
         self.duplicate_info = []
         
+        # 全局邮件跟踪文件
+        self.global_processed_file = Path("eml_process/.global_processed_emails.json")
+        self.global_processed_emails = self._load_global_processed()
+        
+    def _load_global_processed(self) -> Dict:
+        """加载全局已处理邮件记录"""
+        if self.global_processed_file.exists():
+            try:
+                with open(self.global_processed_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[WARNING] Failed to load global processed emails: {e}")
+        return {}
+    
+    def _save_global_processed(self):
+        """保存全局已处理邮件记录"""
+        try:
+            self.global_processed_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.global_processed_file, 'w', encoding='utf-8') as f:
+                json.dump(self.global_processed_emails, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARNING] Failed to save global processed emails: {e}")
+        
     def decode_email_header(self, header_value: str) -> str:
         """解码邮件头部信息"""
         if not header_value:
@@ -333,13 +356,34 @@ class EmailCleaner:
         # 解析所有邮件
         emails = []
         failed_files = []
+        global_duplicates = []  # 全局重复的邮件
         
         for eml_file in eml_files:
             print(f"[PARSE] Parsing: {eml_file.name}")
+            
+            # 检查是否是全局重复
+            file_name = eml_file.name
+            if file_name in self.global_processed_emails:
+                previous_batch = self.global_processed_emails[file_name].get('batch_id', 'unknown')
+                previous_time = self.global_processed_emails[file_name].get('processed_at', 'unknown')
+                print(f"[GLOBAL DUPLICATE] {file_name} already processed in batch {previous_batch} at {previous_time}")
+                global_duplicates.append({
+                    'file_name': file_name,
+                    'previous_batch': previous_batch,
+                    'previous_time': previous_time
+                })
+                continue
+            
             email_info = self.parse_eml_file(eml_file)
             
             if email_info:
                 emails.append(email_info)
+                # 记录到全局已处理
+                self.global_processed_emails[file_name] = {
+                    'batch_id': batch_id,
+                    'processed_at': datetime.now().isoformat(),
+                    'subject': email_info.get('subject', '')
+                }
             else:
                 failed_files.append(eml_file.name)
         
@@ -347,6 +391,9 @@ class EmailCleaner:
             return {"success": False, "batch_id": batch_id, "message": "所有邮件解析失败"}
         
         print(f"[SUCCESS] Successfully parsed {len(emails)} emails")
+        
+        # 保存全局已处理记录
+        self._save_global_processed()
         
         # 去重处理（只在批次内去重）
         print("[DEDUP] Starting deduplication...")
@@ -367,9 +414,10 @@ class EmailCleaner:
             batch_info['status']['cleaned'] = True
             batch_info['processing_history']['cleaned_at'] = datetime.now().isoformat()
             batch_info['dedup_stats'] = {
-                'total_emails': len(emails),
+                'total_emails': len(eml_files),
                 'unique_emails': len(unique_emails),
-                'duplicates': len(duplicates)
+                'duplicates': len(duplicates),
+                'global_duplicates': len(global_duplicates)
             }
             
             with open(batch_info_file, 'w', encoding='utf-8') as f:
@@ -382,6 +430,8 @@ class EmailCleaner:
             "parsed_files": len(emails),
             "unique_files": len(unique_emails),
             "duplicate_files": len(duplicates),
+            "global_duplicate_files": len(global_duplicates),
+            "global_duplicates": global_duplicates,
             "failed_files": failed_files,
             "saved_files": saved_files
         }
@@ -428,11 +478,17 @@ class EmailCleaner:
                 # 汇总统计
                 total_unique = sum(r.get('unique_files', 0) for r in results if r.get('success'))
                 total_duplicates = sum(r.get('duplicate_files', 0) for r in results if r.get('success'))
+                total_global_duplicates = sum(r.get('global_duplicate_files', 0) for r in results if r.get('success'))
                 total_failed = sum(len(r.get('failed_files', [])) for r in results if r.get('success'))
+                all_global_duplicates = []
+                for r in results:
+                    if r.get('success') and r.get('global_duplicates'):
+                        all_global_duplicates.extend(r['global_duplicates'])
                 
                 print(f"[STATS] All batches processed:")
                 print(f"  - Total unique emails: {total_unique}")
-                print(f"  - Total duplicates: {total_duplicates}")
+                print(f"  - Total duplicates (in batch): {total_duplicates}")
+                print(f"  - Total global duplicates (cross-batch): {total_global_duplicates}")
                 print(f"  - Total failed: {total_failed}")
                 
                 return {
@@ -443,8 +499,10 @@ class EmailCleaner:
                         "total_batches": len(results),
                         "total_unique": total_unique,
                         "total_duplicates": total_duplicates,
+                        "total_global_duplicates": total_global_duplicates,
                         "total_failed": total_failed
                     },
+                    "global_duplicates": all_global_duplicates,
                     "report": {
                         "unique_emails": total_unique,
                         "duplicate_emails": total_duplicates,
