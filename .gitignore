@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.next/
+out/
+*.tsbuildinfo
+
+# 环境变量和敏感信息
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 邮件处理数据（大文件）
+eml_process/uploads/
+eml_process/processed/
+eml_process/final_output/
+eml_process/.global_processed_emails.json
+
+# 日志文件
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.bak
+*.backup

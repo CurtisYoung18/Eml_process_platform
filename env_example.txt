@@ -1,0 +1,78 @@
+# ===================================================
+# 邮件知识库处理系统 - 环境变量配置示例
+# ===================================================
+# 
+# 使用说明：
+# 1. 复制此文件内容到 .env 文件中
+# 2. 根据您的实际API Key填写下面的配置
+# 3. 每个API Key都有编号，可以在应用中选择使用
+#
+
+# ===================================================
+# LLM邮件清洗 API Keys
+# ===================================================
+# 用于邮件内容清洗和结构化处理
+GPTBOTS_LLM_API_KEY_1=app-JfbLb7yTAgtelQLZu7PgWBOE
+GPTBOTS_LLM_API_KEY_2=app-JfbLb7yTAgtelQLZu7PgWBOE
+GPTBOTS_LLM_API_KEY_3=app-JfbLb7yTAgtelQLZu7PgWBOE
+
+# ===================================================
+# 知识库上传 API Keys  
+# ===================================================
+# 用于将处理后的文档上传到GPTBots知识库
+GPTBOTS_KB_API_KEY_1=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_KB_API_KEY_2=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_KB_API_KEY_3=app-qJ3OvJto9sh2QWn9HnoijhD7
+
+# ===================================================
+# 问答系统 API Keys
+# ===================================================
+# 用于智能问答功能，也可以用于知识库操作
+GPTBOTS_QA_API_KEY_1=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_QA_API_KEY_2=app-qJ3OvJto9sh2QWn9HnoijhD7
+GPTBOTS_QA_API_KEY_3=app-qJ3OvJto9sh2QWn9HnoijhD7
+
+# ===================================================
+# API端点配置
+# ===================================================
+# GPTBots API端点 (sg/us/eu等)
+GPTBOTS_ENDPOINT=sg
+
+# 对话API URL (用于LLM处理)
+# 格式: https://api-${endpoint}.gptbots.ai/v2/conversation/message
+# GPTBOTS_CONVERSATION_API_URL=https://api-sg.gptbots.ai/v2/conversation/message
+GPTBOTS_CONVERSATION_API_URL=http://10.52.20.41:19080/v2/conversation/message
+
+# 知识库API基础URL
+# 内网部署地址: http://10.52.20.41:19080
+# 公网测试地址: https://api-sg.gptbots.ai
+# KNOWLEDGE_BASE_API_URL=https://api-sg.gptbots.ai
+KNOWLEDGE_BASE_API_URL=http://10.52.20.41:19080
+
+# ===================================================
+# 其他配置
+# ===================================================
+# 日志级别
+LOG_LEVEL=INFO
+
+# ===================================================
+# 文件上传限制配置
+# ===================================================
+# 单个文件最大大小 (单位: MB)
+# 默认: 50MB，适合大多数邮件文件
+# 如需上传更大的附件，可适当增加此值
+MAX_FILE_SIZE=1500
+
+# 单批次最大文件数量
+# 默认: 3000个文件/批次
+# 建议根据服务器性能和网络状况调整
+# - 内网环境: 可设置为 3000-5000
+# - 外网环境: 建议保持 100-300
+BATCH_SIZE_LIMIT=10000
+
+# Flask上传总大小限制 (单位: MB)
+# 控制单次请求的最大总大小，防止内存溢出
+# 默认: 2000MB (可上传约 3000个1MB以内的邮件文件)
+# 计算公式: MAX_FILE_SIZE × 预计同时上传文件数
+# 注意: 3000个文件通常总大小不会超过2GB，除非包含大量附件
+MAX_CONTENT_LENGTH=20000

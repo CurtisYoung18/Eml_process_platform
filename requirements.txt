@@ -1,0 +1,13 @@
+# Flask API后端依赖
+Flask>=3.0.0
+Flask-CORS>=4.0.0
+Werkzeug>=3.0.0
+
+# 现有依赖
+requests>=2.28.0
+pandas>=1.5.0
+python-dotenv>=0.21.0
+
+# 系统监控
+psutil>=5.9.0
+
