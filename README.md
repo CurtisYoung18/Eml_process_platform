@@ -143,7 +143,7 @@ npm run start     # 生产运行
 
 ### 后端开发
 ```bash
-python api_server.py  # API服务 (http://localhost:5000)
+python api_server.py  # API服务 (http://localhost:5001)
 ```
 
 ## 🐛 故障排除
