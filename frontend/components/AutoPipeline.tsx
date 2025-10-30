@@ -512,18 +512,16 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
     }, 0)
     setTotalFilesToProcess(totalFilesInBatches)
     
-    // 预估处理时间：根据实际流程计算
-    // 清洗去重: 0.5秒/文件
-    // LLM处理: 2-3秒/文件（API调用）
-    // 知识库上传: 1秒/文件
-    // 总计约: 4-5秒/文件
-    const avgTimePerFile = 4.5  // 秒（更接近实际情况）
-    const estimated = totalFilesInBatches * avgTimePerFile
-    setEstimatedTime(estimated)
-    setRemainingTime(estimated)
+    // 动态预估：初始使用经验值，后续根据实际进度调整
+    // 清洗去重: 0.5秒/文件, LLM处理: 2-3秒/文件, 知识库上传: 1秒/文件
+    const initialEstimatedTimePerFile = 4.5  // 秒（初始经验值）
+    const initialEstimated = totalFilesInBatches * initialEstimatedTimePerFile
+    setEstimatedTime(initialEstimated)
+    setRemainingTime(initialEstimated)
     setStartTime(Date.now())
     
-    addLog(`📊 预计处理 ${totalFilesInBatches} 个文件，预计用时: ${Math.floor(estimated / 60)}分${estimated % 60}秒`)
+    addLog(`📊 预计处理 ${totalFilesInBatches} 个文件，初步预估: ${Math.floor(initialEstimated / 60)}分${Math.ceil(initialEstimated % 60)}秒`)
+    addLog(`   ⏱️ 预估时间会根据实际处理速度动态调整`)
     
     console.log('=================================')
     console.log('🚀 开始全自动处理流程')
@@ -531,7 +529,7 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
     console.log('配置信息:')
     console.log('- 选中批次:', selectedBatchIds.length, '个')
     console.log('- 总文件数:', totalFilesInBatches, '个')
-    console.log('- 预计用时:', estimated, '秒')
+    console.log('- 初步预估:', initialEstimated, '秒（将动态调整）')
     console.log('- 批次列表:', selectedBatchIds)
     console.log('- LLM API Key:', config.llmApiKey.substring(0, 8) + '...')
     console.log('- KB API Key:', config.kbApiKey.substring(0, 8) + '...')
@@ -632,6 +630,9 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       
       // 实时监控LLM处理进度
       let lastProcessedCount = 0
+      let llmCompleted = false
+      let llmStartTime = Date.now()
+      
       const progressInterval = setInterval(async () => {
         // 检查停止标志
         if (shouldStop) {
@@ -647,7 +648,20 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
             if (currentCount > lastProcessedCount) {
               lastProcessedCount = currentCount
               const processedCount = Math.min(currentCount, actualFilesToProcess)
-              setCurrentStep(`LLM内容处理中 (${processedCount}/${actualFilesToProcess})...`)
+              
+              // 计算实时处理速度和预计剩余时间
+              const elapsedSeconds = (Date.now() - llmStartTime) / 1000
+              const avgTimePerFile = elapsedSeconds / processedCount
+              const remainingFiles = actualFilesToProcess - processedCount
+              const estimatedRemainingSeconds = Math.ceil(avgTimePerFile * remainingFiles)
+              const estimatedMinutes = Math.floor(estimatedRemainingSeconds / 60)
+              const estimatedSeconds = estimatedRemainingSeconds % 60
+              
+              const timeEstimate = estimatedMinutes > 0 
+                ? `预计剩余 ${estimatedMinutes}分${estimatedSeconds}秒`
+                : `预计剩余 ${estimatedSeconds}秒`
+              
+              setCurrentStep(`LLM内容处理中 (${processedCount}/${actualFilesToProcess}) - ${timeEstimate}...`)
               
               // 更新进度条: 30% + (已处理/总数 * 35%)
               const llmProgress = actualFilesToProcess > 0 
@@ -655,7 +669,15 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
                 : 0
               setProgress(30 + llmProgress)
               
-              console.log(`LLM处理进度: ${processedCount}/${actualFilesToProcess}`)
+              console.log(`LLM处理进度: ${processedCount}/${actualFilesToProcess} - ${timeEstimate}`)
+              // 也显示在日志面板中
+              addLog(`   📝 LLM处理进度: ${processedCount}/${actualFilesToProcess} - ${timeEstimate}`)
+              
+              // 检查是否完成
+              if (processedCount >= actualFilesToProcess) {
+                llmCompleted = true
+                clearInterval(progressInterval)
+              }
             }
           }
         } catch (error) {
@@ -663,40 +685,84 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
         }
       }, 1000) // 每1秒检查一次
       
-      const llmResponse = await axios.post(getApiUrl('/api/auto/llm-process'), {
+      // 启动LLM处理（不等待响应，通过进度监控判断完成）
+      const llmPromise = axios.post(getApiUrl('/api/auto/llm-process'), {
         api_key: config.llmApiKey,
         delay: 2,
         batch_ids: selectedBatchIds,
         skip_if_exists: true  // 启用智能跳过
       }, {
-        timeout: 360000000  // 100小时超时（相当于无限）
+        timeout: 0  // 不设置超时，完全依赖进度监控
+      }).catch(error => {
+        // 如果请求失败，但进度监控显示已完成，则忽略错误
+        console.warn('LLM请求返回错误，但可能已完成:', error.message)
+        return { data: { success: false, error: error.message } }
       })
+      
+      // 等待LLM完成（完全依赖进度监控，不设时间限制）
+      let llmResponse = null
+      
+      while (!llmCompleted) {
+        // 每秒检查一次是否通过进度监控判断完成
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // 检查停止标志
+        if (shouldStop) {
+          clearInterval(progressInterval)
+          throw new Error('用户手动停止')
+        }
+        
+        // 检查请求是否有响应
+        const promiseStatus = await Promise.race([
+          llmPromise.then(res => ({ resolved: true, response: res })),
+          Promise.resolve({ resolved: false })
+        ])
+        
+        if (promiseStatus.resolved) {
+          llmResponse = promiseStatus.response
+          break
+        }
+      }
       
       clearInterval(progressInterval) // 清除进度监控
       
-      console.log('LLM响应:', llmResponse.data)
-      console.log('LLM响应详情:', JSON.stringify(llmResponse.data, null, 2))
-      
-      if (llmResponse.data.success) {
-        if (llmResponse.data.skipped) {
-          addLog(`⏭️ LLM处理已完成，跳过此步骤`)
-          if (llmResponse.data.skipped_batches && llmResponse.data.skipped_batches.length > 0) {
-            addLog(`   跳过批次: ${llmResponse.data.skipped_batches.join(', ')}`)
-          }
-        } else {
-        addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
-          if (llmResponse.data.failed_count > 0) {
-            addLog(`   ⚠️ 失败: ${llmResponse.data.failed_count} 个文件`)
-          }
-        }
-        console.log('✅ 步骤2成功: 处理了', llmResponse.data.processed_count, '个文件')
-        if (llmResponse.data.failed_count > 0) {
-          console.warn('⚠️ 失败:', llmResponse.data.failed_count, '个文件')
-        }
+      // 如果通过进度监控判断完成，但没有响应，则认为成功
+      if (llmCompleted && !llmResponse) {
+        console.log('✅ LLM处理通过进度监控确认完成')
+        addLog(`✅ LLM处理完成: ${lastProcessedCount} 个文件`)
         setProgress(65)
-      } else {
-        console.error('❌ 步骤2失败:', llmResponse.data.error)
-        throw new Error(llmResponse.data.error || 'LLM处理失败')
+      } else if (llmResponse) {
+        console.log('LLM响应:', llmResponse.data)
+        console.log('LLM响应详情:', JSON.stringify(llmResponse.data, null, 2))
+        
+        if (llmResponse.data.success) {
+          if (llmResponse.data.skipped) {
+            addLog(`⏭️ LLM处理已完成，跳过此步骤`)
+            if (llmResponse.data.skipped_batches && llmResponse.data.skipped_batches.length > 0) {
+              addLog(`   跳过批次: ${llmResponse.data.skipped_batches.join(', ')}`)
+            }
+          } else {
+          addLog(`✅ LLM处理完成: ${llmResponse.data.processed_count} 个文件`)
+            if (llmResponse.data.failed_count > 0) {
+              addLog(`   ⚠️ 失败: ${llmResponse.data.failed_count} 个文件`)
+            }
+          }
+          console.log('✅ 步骤2成功: 处理了', llmResponse.data.processed_count, '个文件')
+          if (llmResponse.data.failed_count > 0) {
+            console.warn('⚠️ 失败:', llmResponse.data.failed_count, '个文件')
+          }
+          setProgress(65)
+        } else {
+          // 如果响应失败，但进度监控显示完成，仍然继续
+          if (llmCompleted) {
+            console.log('⚠️ LLM响应失败，但进度监控显示已完成，继续处理')
+            addLog(`✅ LLM处理完成: ${lastProcessedCount} 个文件 (通过进度监控确认)`)
+            setProgress(65)
+          } else {
+            console.error('❌ 步骤2失败:', llmResponse.data.error)
+            throw new Error(llmResponse.data.error || 'LLM处理失败')
+          }
+        }
       }
 
       // 检查是否需要停止
