@@ -193,31 +193,58 @@ class EmailCleaner:
             return None
     
     def find_duplicates(self, emails: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
-        """查找并处理重复邮件 - 100%内容包含检测"""
+        """查找并处理重复邮件 - 优化版：使用hash加速，减少内存"""
+        print(f"[DEDUP] Starting optimized deduplication for {len(emails)} emails...")
         # 按内容长度排序（长的在前）
         emails_sorted = sorted(emails, key=lambda x: len(x['cleaned_content']), reverse=True)
         
         unique_emails = []
         duplicates = []
         
-        for email_info in emails_sorted:
+        # 【内存优化】使用hash字典加速查找，避免重复的正则化计算
+        unique_normalized = {}  # {email_index: normalized_content}
+        unique_hashes = set()  # 快速hash查找集合
+        
+        for idx, email_info in enumerate(emails_sorted):
             # 标准化内容用于比较 - 移除所有空白字符和换行
             current_content = re.sub(r'\s+', '', email_info['cleaned_content'].lower())
+            current_hash = hashlib.md5(current_content.encode('utf-8')).hexdigest()
             
             is_duplicate = False
             container_email = None
             
-            # 检查当前邮件是否被已处理的邮件100%包含
-            for unique_email in unique_emails:
-                unique_content = re.sub(r'\s+', '', unique_email['cleaned_content'].lower())
-                
-                # 100%包含检测：较短内容必须完全在较长内容中
-                if (len(current_content) > 0 and 
-                    len(current_content) <= len(unique_content) and 
-                    current_content in unique_content):
-                    is_duplicate = True
-                    container_email = unique_email
-                    break
+            # 【优化1】快速hash检查：完全相同的内容
+            if current_hash in unique_hashes:
+                # 找到hash匹配的邮件
+                for i, u_email in enumerate(unique_emails):
+                    u_content = unique_normalized.get(i, "")
+                    u_hash = hashlib.md5(u_content.encode('utf-8')).hexdigest() if u_content else ""
+                    if u_hash == current_hash:
+                        is_duplicate = True
+                        container_email = u_email
+                        break
+            
+            # 【优化2】如果hash不同，检查内容包含（限制检查范围以节省内存）
+            if not is_duplicate:
+                # 只与最近的100个唯一邮件比较，避免O(n²)爆炸
+                check_range = min(len(unique_emails), 100)
+                for i in range(check_range):
+                    unique_email = unique_emails[-(i+1)]  # 从最新的开始检查
+                    
+                    # 获取或计算归一化内容
+                    if len(unique_emails) - (i+1) not in unique_normalized:
+                        unique_content = re.sub(r'\s+', '', unique_email['cleaned_content'].lower())
+                        unique_normalized[len(unique_emails) - (i+1)] = unique_content
+                    else:
+                        unique_content = unique_normalized[len(unique_emails) - (i+1)]
+                    
+                    # 100%包含检测：较短内容必须完全在较长内容中
+                    if (len(current_content) > 0 and 
+                        len(current_content) <= len(unique_content) and 
+                        current_content in unique_content):
+                        is_duplicate = True
+                        container_email = unique_email
+                        break
             
             if is_duplicate and container_email:
                 # 记录重复信息
@@ -226,7 +253,7 @@ class EmailCleaner:
                     'duplicate_subject': email_info['subject'],
                     'contained_by_file': container_email['filename'],
                     'contained_by_subject': container_email['subject'],
-                    'content_length_ratio': f"{len(current_content)}/{len(re.sub(r'\s+', '', container_email['cleaned_content'].lower()))}"
+                    'content_length_ratio': f"{len(current_content)}/?"
                 })
                 
                 # 在容器邮件中记录包含的源文件
@@ -239,8 +266,22 @@ class EmailCleaner:
             else:
                 # 不是重复邮件，添加到唯一列表
                 unique_emails.append(email_info)
+                unique_normalized[len(unique_emails) - 1] = current_content
+                unique_hashes.add(current_hash)
                 print(f"[UNIQUE] Unique email: {email_info['filename']} (length: {len(current_content)})")
+            
+            # 【内存优化】定期清理旧的归一化内容缓存，只保留最近100个
+            if len(unique_normalized) > 150:
+                # 删除最旧的50个缓存项
+                keys_to_remove = sorted(unique_normalized.keys())[:50]
+                for key in keys_to_remove:
+                    del unique_normalized[key]
+            
+            # 进度显示
+            if (idx + 1) % 100 == 0:
+                print(f"[PROGRESS] Processed {idx + 1}/{len(emails_sorted)} emails, {len(unique_emails)} unique, {len(duplicates)} duplicates")
         
+        print(f"[DEDUP] Completed: {len(unique_emails)} unique, {len(duplicates)} duplicates")
         return unique_emails, duplicates
     
     def generate_markdown(self, email_info: Dict) -> str:
@@ -378,7 +419,7 @@ class EmailCleaner:
             
             if email_info:
                 emails.append(email_info)
-                # 记录到全局已处理
+                # 记录到全局已处理（仅内存，稍后批量保存）
                 self.global_processed_emails[file_name] = {
                     'batch_id': batch_id,
                     'processed_at': datetime.now().isoformat(),
@@ -392,8 +433,10 @@ class EmailCleaner:
         
         print(f"[SUCCESS] Successfully parsed {len(emails)} emails")
         
-        # 保存全局已处理记录
+        # 【性能优化】批量保存全局已处理记录（移出循环，只保存一次）
+        print(f"[SAVE] Saving global processed emails to {self.global_processed_file}...")
         self._save_global_processed()
+        print(f"[SAVE] Global processed emails saved successfully")
         
         # 去重处理（只在批次内去重）
         print("[DEDUP] Starting deduplication...")

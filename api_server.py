@@ -975,7 +975,8 @@ def auto_clean():
                     if md_files:
                         log_activity(f"批次 {batch_id} 已有 {len(md_files)} 个处理后的文件，跳过清洗步骤")
                         skipped_batches.append(batch_id)
-                        continue
+                        continue  # 只有在有MD文件时才跳过
+                # 目录不存在，或者存在但没有MD文件，都应该处理
                 batches_to_process.append(batch_id)
             
             if not batches_to_process:
@@ -1034,8 +1035,13 @@ def auto_clean():
             return jsonify({'success': False, 'error': error_msg})
             
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
         log_activity(f"邮件清洗异常: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        log_activity(f"错误堆栈: {error_trace}")
+        print(f"邮件清洗异常: {str(e)}")
+        print(f"错误堆栈:\n{error_trace}")
+        return jsonify({'success': False, 'error': str(e), 'traceback': error_trace}), 500
 
 
 @app.route('/api/auto/llm-process', methods=['POST'])
@@ -1083,10 +1089,15 @@ def auto_llm_process():
             
             if not batches_to_process:
                 log_activity(f"所有批次都已完成LLM处理，跳过此步骤")
+                # 更新所有跳过批次的状态
+                for batch_id in skipped_batches:
+                    update_batch_status_file(batch_id, 'llm_processed', True)
+                
                 return jsonify({
                     'success': True,
                     'processed_count': 0,
                     'failed_count': 0,
+                    'total_files_after_dedup': 0,
                     'skipped': True,
                     'skipped_batches': skipped_batches,
                     'message': '所有批次都已完成LLM处理，已跳过'
@@ -1237,8 +1248,13 @@ def auto_llm_process():
                 'error': error_msg
             })
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
         log_activity(f"LLM处理异常: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        log_activity(f"错误堆栈: {error_trace}")
+        print(f"LLM处理异常: {str(e)}")
+        print(f"错误堆栈:\n{error_trace}")
+        return jsonify({'success': False, 'error': str(e), 'traceback': error_trace}), 500
 
 
 @app.route('/api/auto/upload-kb', methods=['POST'])
