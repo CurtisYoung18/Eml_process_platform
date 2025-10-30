@@ -61,7 +61,7 @@ class KnowledgeBaseAPI:
         self.retry_embedding_url = f"{self.base_url}/v1/bot/data/retry/batch"
         
         self.session = requests.Session()
-        self.timeout = 10  # 10秒超时
+        self.timeout = None  # 无超时限制
         
     def _get_headers(self) -> Dict[str, str]:
         """获取标准请求头"""
@@ -622,6 +622,9 @@ class KnowledgeBaseAPI:
             # 可选参数
             if knowledge_base_id:
                 upload_data["knowledge_base_id"] = knowledge_base_id
+                self.logger.info(f"上传到知识库: {knowledge_base_id}")
+            else:
+                self.logger.warning(f"警告: 未指定知识库ID，将使用默认知识库")
             
             # 分块参数（二选一）
             if splitter:
@@ -629,16 +632,20 @@ class KnowledgeBaseAPI:
             else:
                 upload_data["chunk_token"] = chunk_token
             
+            self.logger.info(f"上传请求数据: KB_ID={knowledge_base_id}, filename={filename}, chunk_token={chunk_token}")
+            
             # 发送上传请求
             response = requests.post(
                 self.add_text_doc_url,
                 headers=self._get_headers(),
                 json=upload_data,
-                timeout=300  # 5分钟超时
+                timeout=None  # 无超时限制
             )
             
+            self.logger.info(f"上传响应状态: {response.status_code}")
             if response.status_code == 200:
                 result = response.json()
+                self.logger.info(f"上传响应内容: {result}")
                 self.logger.info(f"单文件上传成功: {filename}")
                 return {
                     "success": True,

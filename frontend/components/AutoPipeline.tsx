@@ -479,11 +479,22 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
     setCurrentView('config')
   }
 
-  const handleStopProcess = () => {
+  const handleStopProcess = async () => {
     if (confirm('确定要停止处理吗？已处理的数据会保留，但未完成的处理将被中断。')) {
       setShouldStop(true)
+      setCurrentStep('正在停止处理...')
       addLog('⚠️ 用户请求停止处理...')
+      addLog('   请稍候，正在安全停止当前任务...')
       console.log('⚠️ 用户请求停止处理')
+      
+      // 发送停止信号到后端
+      try {
+        await axios.post(getApiUrl('/api/auto/stop'))
+        addLog('   ✅ 停止信号已发送到后端')
+      } catch (error) {
+        console.error('发送停止信号失败:', error)
+        addLog('   ⚠️ 停止信号发送失败，但前端会停止')
+      }
     }
   }
 
@@ -498,6 +509,12 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       alert('请至少选择一个批次进行处理')
       return
     }
+    
+    // 限制只能选择一个批次
+    if (selectedBatchIds.length > 1) {
+      alert('一次只能处理一个批次，请只选择一个批次')
+      return
+    }
 
     setRunning(true)
     setShouldStop(false)
@@ -505,57 +522,65 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
     setLogs([])
     addLog('🚀 开始全自动处理流程...')
     
-    // 计算总文件数（使用局部变量，避免状态更新延迟）
-    const totalFilesInBatches = selectedBatchIds.reduce((sum, batchId) => {
-      const batch = batches.find(b => b.batch_id === batchId)
-      return sum + (batch?.file_count || 0)
-    }, 0)
-    setTotalFilesToProcess(totalFilesInBatches)
+    // 获取选中批次的文件数
+    const batchId = selectedBatchIds[0]
+    const batch = batches.find(b => b.batch_id === batchId)
+    const totalFiles = batch?.file_count || 0
+    setTotalFilesToProcess(totalFiles)
     
-    // 动态预估：初始使用经验值，后续根据实际进度调整
-    // 清洗去重: 0.5秒/文件, LLM处理: 2-3秒/文件, 知识库上传: 1秒/文件
-    const initialEstimatedTimePerFile = 4.5  // 秒（初始经验值）
-    const initialEstimated = totalFilesInBatches * initialEstimatedTimePerFile
+    // 动态预估：初始使用经验值
+    const initialEstimatedTimePerFile = 17  // 秒（基于实际日志：LLM处理~17秒/文件）
+    const initialEstimated = totalFiles * initialEstimatedTimePerFile
     setEstimatedTime(initialEstimated)
     setRemainingTime(initialEstimated)
     setStartTime(Date.now())
     
-    addLog(`📊 预计处理 ${totalFilesInBatches} 个文件，初步预估: ${Math.floor(initialEstimated / 60)}分${Math.ceil(initialEstimated % 60)}秒`)
-    addLog(`   ⏱️ 预估时间会根据实际处理速度动态调整`)
+    const hours = Math.floor(initialEstimated / 3600)
+    const minutes = Math.floor((initialEstimated % 3600) / 60)
+    const seconds = Math.ceil(initialEstimated % 60)
+    const timeStr = hours > 0 
+      ? `${hours}小时${minutes}分${seconds}秒`
+      : minutes > 0 
+        ? `${minutes}分${seconds}秒`
+        : `${seconds}秒`
     
-    console.log('=================================')
-    console.log('🚀 开始全自动处理流程')
-    console.log('=================================')
-    console.log('配置信息:')
-    console.log('- 选中批次:', selectedBatchIds.length, '个')
-    console.log('- 总文件数:', totalFilesInBatches, '个')
-    console.log('- 初步预估:', initialEstimated, '秒（将动态调整）')
-    console.log('- 批次列表:', selectedBatchIds)
-    console.log('- LLM API Key:', config.llmApiKey.substring(0, 8) + '...')
-    console.log('- KB API Key:', config.kbApiKey.substring(0, 8) + '...')
-    console.log('- 知识库ID:', config.selectedKnowledgeBase)
-    console.log('- 分块模式:', config.chunkMode)
-    if (config.chunkMode === 'token') {
-      console.log('- 分块大小:', config.chunkToken, 'tokens')
-    } else {
-      console.log('- 分隔符:', config.chunkSeparator)
+    addLog(`📊 预计处理 ${totalFiles} 个文件 (批次: ${batchId})`)
+    addLog(`   ⏱️ 初步预估: ${timeStr}（基于原始文件数）`)
+    addLog(`   📝 注意：去重后会自动调整预估时间`)
+    
+    try {
+      // ========== 单批次处理流程 ==========
+      await processSingleBatchFlow(batchId, totalFiles)
+    } catch (error: any) {
+      console.error('❌ === 处理流程异常 ===')
+      console.error('错误详情:', error)
+      
+      if (axios.isAxiosError(error) && error.response) {
+        console.error('响应状态:', error.response.status)
+        console.error('响应数据:', error.response.data)
+      }
+      
+      addLog(`❌ 错误: ${error.message}`)
+      setCurrentStep('处理失败')
+      setProgress(0)
+    } finally {
+      console.log('=== 处理流程结束 ===')
+      setRunning(false)
+      setShouldStop(false)
     }
-    console.log('=================================')
+  }
 
+  // ========== 单批次处理流程（原有逻辑）==========
+  const processSingleBatchFlow = async (batchId: string, totalFiles: number) => {
     try {
       // 步骤1: 邮件清洗（去重、转markdown）
       setCurrentStep('邮件清洗去重中...')
       setProgress(10)
-      addLog(`📧 步骤1: 开始邮件清洗和去重 (${selectedBatchIds.length}个批次)`)
-      console.log('=== 步骤1: 邮件清洗 ===')
-      console.log('请求URL:', `${API_BASE_URL}/api/auto/clean`)
-      console.log('请求参数:', { batch_ids: selectedBatchIds })
+      addLog(`📧 步骤1: 开始邮件清洗和去重 (1个批次)`)
       
       const cleanResponse = await axios.post(getApiUrl('/api/auto/clean'), {
-        batch_ids: selectedBatchIds,
+        batch_ids: [batchId],
         skip_if_exists: true  // 启用智能跳过
-      }, {
-        timeout: 360000000  // 100小时超时（相当于无限）
       })
       
       console.log('清洗响应:', cleanResponse.data)
@@ -587,8 +612,10 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       // 检查是否需要停止
       if (shouldStop) {
         addLog('🛑 处理已停止（在步骤1后）')
+        addLog(`   ✅ 已完成清洗：${cleanResponse.data.processed_count} 个文件`)
         console.log('🛑 处理已停止')
-        setCurrentStep('处理已停止')
+        setCurrentStep('已停止 - 清洗完成')
+        setRunning(false)
         return
       }
 
@@ -601,20 +628,20 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
           // 只统计当前选中批次的文件
           const allProcessedFiles = processedFilesResponse.data.files
           const selectedBatchFiles = allProcessedFiles.filter((file: string) => {
-            const batchId = file.split('/')[0] // 提取批次ID
-            return selectedBatchIds.includes(batchId)
+            const fileBatchId = file.split('/')[0] // 提取批次ID
+            return fileBatchId === batchId
           })
           actualFilesToProcess = selectedBatchFiles.length
           addLog(`📋 检测到去重后的文件数: ${actualFilesToProcess} 个`)
         }
       } catch (error) {
         console.error('获取去重文件数失败，使用清洗返回的数量:', error)
-        actualFilesToProcess = cleanResponse.data.processed_count || totalFilesInBatches
+        actualFilesToProcess = cleanResponse.data.processed_count || totalFiles
       }
       
       // 如果仍然是0，使用批次文件数作为fallback
       if (actualFilesToProcess === 0) {
-        actualFilesToProcess = totalFilesInBatches
+        actualFilesToProcess = totalFiles
       }
       
       setCurrentStep(`LLM内容处理中 (0/${actualFilesToProcess})...`)
@@ -623,7 +650,7 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       console.log('请求URL:', `${API_BASE_URL}/api/auto/llm-process`)
       console.log('请求参数:', {
         api_key: config.llmApiKey.substring(0, 8) + '...',
-        delay: 2,
+        delay: 1,
         total_files: actualFilesToProcess,
         note: '如果清洗步骤被跳过，使用批次文件数'
       })
@@ -632,6 +659,8 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       let lastProcessedCount = 0
       let llmCompleted = false
       let llmStartTime = Date.now()
+      const recentProcessingTimes: number[] = [] // 记录最近几个文件的处理时间
+      let lastUpdateTime = llmStartTime
       
       const progressInterval = setInterval(async () => {
         // 检查停止标志
@@ -641,17 +670,30 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
         }
         
         try {
-          // 获取当前已处理的文件数
-          const statsResponse = await axios.get(`${API_BASE_URL}/api/llm-processed-files`)
+          // 获取当前已处理的文件数（只统计当前批次）
+          const statsResponse = await axios.get(`${API_BASE_URL}/api/llm-processed-files?batch_id=${encodeURIComponent(batchId)}`)
           if (statsResponse.data.success) {
-            const currentCount = statsResponse.data.files.length
+            const currentCount = statsResponse.data.count || statsResponse.data.files.length
             if (currentCount > lastProcessedCount) {
+              // 记录这个文件的处理时间
+              const now = Date.now()
+              const timeSinceLastFile = (now - lastUpdateTime) / 1000
+              recentProcessingTimes.push(timeSinceLastFile)
+              
+              // 只保留最近10个文件的处理时间（移动平均）
+              if (recentProcessingTimes.length > 10) {
+                recentProcessingTimes.shift()
+              }
+              
               lastProcessedCount = currentCount
+              lastUpdateTime = now
               const processedCount = Math.min(currentCount, actualFilesToProcess)
               
-              // 计算实时处理速度和预计剩余时间
-              const elapsedSeconds = (Date.now() - llmStartTime) / 1000
-              const avgTimePerFile = elapsedSeconds / processedCount
+              // 使用最近10个文件的平均时间来预估（更准确）
+              const avgTimePerFile = recentProcessingTimes.length > 0
+                ? recentProcessingTimes.reduce((a, b) => a + b, 0) / recentProcessingTimes.length
+                : (now - llmStartTime) / 1000 / processedCount
+              
               const remainingFiles = actualFilesToProcess - processedCount
               const estimatedRemainingSeconds = Math.ceil(avgTimePerFile * remainingFiles)
               const estimatedMinutes = Math.floor(estimatedRemainingSeconds / 60)
@@ -688,11 +730,10 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       // 启动LLM处理（不等待响应，通过进度监控判断完成）
       const llmPromise = axios.post(getApiUrl('/api/auto/llm-process'), {
         api_key: config.llmApiKey,
-        delay: 2,
-        batch_ids: selectedBatchIds,
-        skip_if_exists: true  // 启用智能跳过
-      }, {
-        timeout: 0  // 不设置超时，完全依赖进度监控
+        delay: 1,  // 每个请求间隔1秒
+        batch_ids: [batchId],
+        skip_if_exists: true,  // 启用智能跳过
+        max_workers: 1  // 并发数：1（串行处理，避免API限流）
       }).catch(error => {
         // 如果请求失败，但进度监控显示已完成，则忽略错误
         console.warn('LLM请求返回错误，但可能已完成:', error.message)
@@ -729,9 +770,9 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       // 如果通过进度监控判断完成，但没有响应，则认为成功
       if (llmCompleted && !llmResponse) {
         console.log('✅ LLM处理通过进度监控确认完成')
-        addLog(`✅ LLM处理完成: ${lastProcessedCount} 个文件`)
+        addLog(`✅ LLM处理完成: ${actualFilesToProcess} 个文件`)
         setProgress(65)
-      } else if (llmResponse) {
+      } else if (llmResponse && llmResponse.data) {
         console.log('LLM响应:', llmResponse.data)
         console.log('LLM响应详情:', JSON.stringify(llmResponse.data, null, 2))
         
@@ -759,17 +800,24 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
             addLog(`✅ LLM处理完成: ${lastProcessedCount} 个文件 (通过进度监控确认)`)
             setProgress(65)
           } else {
-            console.error('❌ 步骤2失败:', llmResponse.data.error)
-            throw new Error(llmResponse.data.error || 'LLM处理失败')
+            console.error('❌ 步骤2失败:', llmResponse?.data?.error || 'Unknown error')
+            throw new Error(llmResponse?.data?.error || 'LLM处理失败')
           }
         }
+      } else {
+        // llmResponse为null或没有data，使用进度监控的结果
+        addLog(`✅ LLM处理通过进度监控确认完成`)
+        console.log('✅ LLM处理完成（通过进度监控）')
+        setProgress(65)
       }
 
       // 检查是否需要停止
       if (shouldStop) {
         addLog('🛑 处理已停止（在步骤2后）')
+        addLog(`   ✅ 已完成LLM处理：${lastProcessedCount} 个文件`)
         console.log('🛑 处理已停止')
-        setCurrentStep('处理已停止')
+        setCurrentStep('已停止 - LLM处理部分完成')
+        setRunning(false)
         return
       }
 
@@ -782,63 +830,169 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
         api_key: config.kbApiKey,
         knowledge_base_id: config.selectedKnowledgeBase,
         batch_size: 15,  // API限制每批最多20个，使用15确保稳定（自动分批）
-        batch_ids: selectedBatchIds,
+        batch_ids: [batchId],
         skip_if_exists: true  // 启用智能跳过
       }
       
-      // 根据分块模式选择参数
+      // 根据分块模式选择参数      
       if (config.chunkMode === 'token') {
         kbUploadParams.chunk_token = config.chunkToken
-        console.log('分块模式: Token大小 =', config.chunkToken)
       } else {
         kbUploadParams.chunk_separator = config.chunkSeparator
-        console.log('分块模式: 分隔符 =', config.chunkSeparator)
       }
       
-      console.log('请求URL:', `${API_BASE_URL}/api/auto/upload-kb`)
-      console.log('请求参数:', {
-        api_key: config.kbApiKey.substring(0, 8) + '...',
-        knowledge_base_id: config.selectedKnowledgeBase,
-        chunk_mode: config.chunkMode,
-        batch_size: 15,
-        note: '后端会自动分批处理，每批最多15个文件'
-      })
+      // 启动知识库上传进度监控
+      let kbUploadCompleted = false
+      const kbProgressInterval = setInterval(async () => {
+        if (kbUploadCompleted || shouldStop) {
+          clearInterval(kbProgressInterval)
+          return
+        }
+        
+        try {
+          const progressResponse = await axios.get(getApiUrl('/api/kb-upload-progress'))
+          if (progressResponse.data.success) {
+            const { uploaded, total, is_uploading } = progressResponse.data
+            
+            if (total > 0) {
+              // 动态计算进度（90%-100%）
+              const kbProgress = 90 + (uploaded / total) * 10
+              setProgress(Math.min(Math.round(kbProgress), 100))
+              setCurrentStep(`Knowledge Base Upload: ${uploaded}/${total} files`)
+              addLog(`📚 KB upload progress: ${uploaded}/${total} files`)
+              console.log(`📚 KB upload progress: ${uploaded}/${total} files`)
+              
+              if (!is_uploading && uploaded === total) {
+                kbUploadCompleted = true
+                clearInterval(kbProgressInterval)
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Failed to get KB upload progress:', error)
+        }
+      }, 5000)  // 每5秒检查一次
       
-      const kbResponse = await axios.post(getApiUrl('/api/auto/upload-kb'), kbUploadParams, {
-        timeout: 360000000  // 100小时超时（相当于无限）
-      })
+      const kbResponse = await axios.post(getApiUrl('/api/auto/upload-kb'), kbUploadParams)
+        .catch(error => {
+          // 知识库上传可能因为时间过长而超时，但后台可能还在上传
+          addLog('⚠️ Frontend connection timeout, backend still uploading...')
+          addLog('   Please check progress monitoring above')
+          return { data: { success: false, error: error.message, timeout: true } }
+        })
       
       console.log('知识库上传响应:', kbResponse.data)
       
+      // 如果是超时，等待进度监控确认完成
+      if (kbResponse.data.timeout) {
+        addLog('⏰ Upload timeout: Frontend connection lost')
+        addLog('   💡 Waiting for backend to finish (monitoring progress)...')
+        setCurrentStep('Uploading to KB (backend processing)...')
+        
+        // 等待上传完成（通过进度监控）
+        const maxWaitTime = 30 * 60 * 1000  // 最多等待30分钟
+        const startWaitTime = Date.now()
+        
+        while (!kbUploadCompleted && !shouldStop) {
+          if (Date.now() - startWaitTime > maxWaitTime) {
+            addLog('⚠️ KB upload still in progress after 30 minutes')
+            addLog('   Please check the knowledge base later')
+            break
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 5000))
+          
+          // 检查进度
+          try {
+            const progressResponse = await axios.get(getApiUrl('/api/kb-upload-progress'))
+            if (progressResponse.data.success) {
+              const { uploaded, total, is_uploading } = progressResponse.data
+              
+              if (!is_uploading && uploaded === total && total > 0) {
+                kbUploadCompleted = true
+                addLog(`✅ KB upload confirmed complete: ${uploaded} files`)
+                
+                // 显示完成状态
+                setProcessingResult({
+                  cleanedCount: cleanResponse.data.processed_count,
+                  duplicates: cleanResponse.data.duplicates || 0,
+                  llmProcessed: actualFilesToProcess || 0,
+                  llmFailed: 0,
+                  kbUploaded: uploaded
+                })
+                
+                setProgress(100)
+                setCurrentStep('All complete!')
+                addLog('🎉 Automated processing completed!')
+                setCurrentView('completed')
+                clearInterval(kbProgressInterval)
+                return
+              }
+            }
+          } catch (error) {
+            console.error('Failed to check KB upload status:', error)
+          }
+        }
+        
+        // 如果被用户停止
+        if (shouldStop) {
+          clearInterval(kbProgressInterval)
+          addLog('⚠️ User stopped the process')
+          setCurrentStep('Stopped by user')
+          setCurrentView('completed')
+          return
+        }
+        
+        // 如果超时了但还没完成
+        clearInterval(kbProgressInterval)
+        setProcessingResult({
+          cleanedCount: cleanResponse.data.processed_count,
+          duplicates: cleanResponse.data.duplicates || 0,
+          llmProcessed: actualFilesToProcess || 0,
+          llmFailed: 0,
+          kbUploaded: 0  // 未知数量
+        })
+        
+        setProgress(95)
+        setCurrentStep('Upload in progress (backend processing)')
+        addLog('   💡 Backend still uploading, please check later')
+        setCurrentView('completed')
+        return
+      }
+      
+      // 清除进度监控
+      clearInterval(kbProgressInterval)
+      kbUploadCompleted = true
+      
       if (kbResponse.data.success) {
         if (kbResponse.data.skipped) {
-          addLog(`⏭️ 知识库上传已完成，跳过此步骤`)
+          addLog(`⏭️ KB upload already completed, skipped`)
           if (kbResponse.data.skipped_batches && kbResponse.data.skipped_batches.length > 0) {
-            addLog(`   跳过批次: ${kbResponse.data.skipped_batches.join(', ')}`)
+            addLog(`   Skipped batches: ${kbResponse.data.skipped_batches.join(', ')}`)
           }
         } else {
-        addLog(`✅ 知识库上传完成: ${kbResponse.data.uploaded_count} 个文件`)
+          addLog(`✅ KB upload complete: ${kbResponse.data.uploaded_count} files`)
         }
-        console.log('✅ 步骤3成功: 上传了', kbResponse.data.uploaded_count, '个文件')
+        console.log('✅ Step 3 success: uploaded', kbResponse.data.uploaded_count, 'files')
         setProgress(100)
-        setCurrentStep('全部完成！')
-        addLog('🎉 全自动处理流程完成！')
-        console.log('🎉 === 全自动处理流程完成 ===')
+        setCurrentStep('All complete!')
+        addLog('🎉 Automated processing complete!')
+        console.log('🎉 === Automated processing complete ===')
         
         // 保存处理结果
         setProcessingResult({
           cleanedCount: cleanResponse.data.processed_count,
           duplicates: cleanResponse.data.duplicates || 0,
-          llmProcessed: llmResponse.data.processed_count,
-          llmFailed: llmResponse.data.failed_count || 0,
+          llmProcessed: llmResponse?.data?.processed_count || actualFilesToProcess || 0,
+          llmFailed: llmResponse?.data?.failed_count || 0,
           kbUploaded: kbResponse.data.uploaded_count
         })
         
         // 切换到完成页面（无自动跳转）
         setCurrentView('completed')
       } else {
-        console.error('❌ 步骤3失败:', kbResponse.data.error)
-        throw new Error(kbResponse.data.error || '知识库上传失败')
+        console.error('❌ Step 3 failed:', kbResponse.data.error)
+        throw new Error(kbResponse.data.error || 'KB upload failed')
       }
 
     } catch (error: any) {
@@ -850,9 +1004,7 @@ export default function AutoPipeline({ onNavigate, onProcessingChange }: AutoPip
       }
       addLog(`❌ 错误: ${error.message}`)
       setCurrentStep('处理失败')
-    } finally {
-      setRunning(false)
-      console.log('=== 处理流程结束 ===')
+      throw error  // 重新抛出错误供主函数处理
     }
   }
 

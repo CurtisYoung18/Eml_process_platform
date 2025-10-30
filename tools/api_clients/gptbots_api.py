@@ -52,7 +52,7 @@ class GPTBotsAPI:
         
         self.create_conversation_url = f"{self.base_url}/v1/conversation"
         self.session = requests.Session()
-        self.timeout = 30  # 30秒超时
+        self.timeout = None  # 无超时限制
         
     def create_conversation(self, user_id: str = "api-user", timeout: int = None) -> Optional[str]:
         """
@@ -60,7 +60,7 @@ class GPTBotsAPI:
         
         Args:
             user_id: 用户标识
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），None表示无超时
         
         Returns:
             conversation_id或None（如果失败）
@@ -102,7 +102,7 @@ class GPTBotsAPI:
         Args:
             conversation_id: 对话ID
             query: 查询内容
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），None表示无超时
             max_retries: 最大重试次数
         
         Returns:
@@ -171,13 +171,13 @@ class GPTBotsAPI:
                     
         return None
 
-    def call_agent(self, query: str, timeout: int = 180) -> Optional[Dict]:
+    def call_agent(self, query: str, timeout: int = None) -> Optional[Dict]:
         """
         调用GPTBots Agent（完整流程：创建对话->发送消息）
         
         Args:
             query: 查询内容
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），None表示无超时
         
         Returns:
             API响应内容或None（如果失败）

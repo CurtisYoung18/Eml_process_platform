@@ -31,8 +31,18 @@ def log_activity(message):
     # 确保logs目录存在
     os.makedirs("logs", exist_ok=True)
     
+    # 写入UTF-8日志（用于程序读取）
     with open("logs/activity.log", "a", encoding="utf-8") as f:
         f.write(log_entry)
+    
+    # 同时写入ASCII兼容日志（用于PowerShell查看，避免乱码）
+    try:
+        ascii_message = message.encode('ascii', errors='replace').decode('ascii')
+        ascii_entry = f"[{timestamp}] {ascii_message}\n"
+        with open("logs/activity_ascii.log", "a", encoding="ascii", errors="replace") as f:
+            f.write(ascii_entry)
+    except:
+        pass  # 如果ASCII日志失败，不影响主日志
 
 
 def get_processing_status():
