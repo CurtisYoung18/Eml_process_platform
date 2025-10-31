@@ -527,7 +527,17 @@ def get_llm_processed_files():
             # 非批次模式：直接从最终输出目录获取
             files = [f.name for f in final_dir.glob("*.md")]
         
-        return jsonify({'success': True, 'files': files, 'count': len(files)})
+        # 检查全局进度状态
+        global llm_processing_progress
+        batch_key = batch_id_filter if batch_id_filter else 'default'
+        is_processing = llm_processing_progress.get(batch_key, {}).get('is_processing', False)
+        
+        return jsonify({
+            'success': True, 
+            'files': files, 
+            'count': len(files),
+            'is_processing': is_processing  # 新增：是否正在处理
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -552,6 +562,42 @@ def get_kb_upload_progress():
             })
         
         progress = kb_upload_progress[batch_key]
+        
+        # 如果上传完成（uploaded === total 且 total > 0），自动更新批次状态
+        # 这确保即使请求返回500或 is_uploading 标志未及时更新，状态也会被更新
+        if progress['total'] > 0 and progress['uploaded'] == progress['total']:
+            # 尝试从 batch_key 提取批次ID（可能是单个批次ID或下划线连接的多个）
+            # 如果是单个批次，直接使用；如果是多个批次，需要拆分
+            batch_ids_from_key = batch_key.split('_') if '_' in batch_key and not batch_key.startswith('batch_') else [batch_key]
+            # 但通常单个批次时，batch_key就是batch_id，多个批次时用下划线连接
+            # 检查是否是批次ID格式
+            if batch_key.startswith('batch_'):
+                # 单个批次，直接使用
+                batch_ids_to_update = [batch_key]
+            else:
+                # 可能是多个批次用下划线连接，尝试解析
+                # 但实际使用中，batch_key通常是单个批次ID
+                batch_ids_to_update = [batch_key] if len(batch_key.split('_')) < 3 else batch_key.split('_')
+            
+            # 更新批次状态（只更新已上传完成的批次）
+            for batch_id in batch_ids_to_update:
+                try:
+                    # 验证是否是有效的批次ID格式
+                    if batch_id.startswith('batch_'):
+                        # 检查批次是否存在且状态未更新
+                        upload_dir = Path(DIRECTORIES["upload_dir"])
+                        batch_dir = upload_dir / batch_id
+                        if batch_dir.exists():
+                            batch_info_file = batch_dir / ".batch_info.json"
+                            if batch_info_file.exists():
+                                with open(batch_info_file, 'r', encoding='utf-8') as f:
+                                    batch_info = json.load(f)
+                                if not batch_info.get('status', {}).get('uploaded_to_kb', False):
+                                    update_batch_status_file(batch_id, 'uploaded_to_kb', True)
+                                    log_activity(f"Auto-updated batch {batch_id} status to 'uploaded_to_kb': True (from progress check)")
+                except Exception as e:
+                    log_activity(f"Failed to auto-update batch status from progress check: {str(e)}")
+        
         return jsonify({
             'success': True,
             'total': progress['total'],
@@ -944,6 +990,50 @@ def health_check():
     return jsonify({'status': 'ok'})
 
 
+@app.errorhandler(500)
+def internal_error(error):
+    """全局500错误处理器"""
+    import traceback
+    error_trace = traceback.format_exc()
+    error_msg = str(error)
+    
+    # 记录详细的错误信息
+    log_activity(f"[500 ERROR] {error_msg}")
+    log_activity(f"[500 ERROR] Traceback: {error_trace}")
+    
+    # 也打印到控制台
+    print(f"[500 ERROR] {error_msg}")
+    print(f"[500 ERROR] Traceback:\n{error_trace}")
+    
+    return jsonify({
+        'success': False,
+        'error': f'Internal Server Error: {error_msg}',
+        'traceback': error_trace
+    }), 500
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """全局异常处理器"""
+    import traceback
+    error_trace = traceback.format_exc()
+    error_msg = str(e)
+    
+    # 记录详细的错误信息
+    log_activity(f"[EXCEPTION] {error_msg}")
+    log_activity(f"[EXCEPTION] Traceback: {error_trace}")
+    
+    # 也打印到控制台
+    print(f"[EXCEPTION] {error_msg}")
+    print(f"[EXCEPTION] Traceback:\n{error_trace}")
+    
+    return jsonify({
+        'success': False,
+        'error': f'Exception: {error_msg}',
+        'traceback': error_trace
+    }), 500
+
+
 # 辅助函数：更新批次状态
 def update_batch_status_file(batch_id: str, status_key: str, status_value: bool = True):
     """更新批次状态到元数据文件"""
@@ -997,6 +1087,10 @@ global_stop_event = Event()
 # 格式: {batch_key: {'total': int, 'uploaded': int, 'is_uploading': bool}}
 kb_upload_progress = {}
 
+# 全局LLM处理进度跟踪（批次隔离）
+# 格式: {batch_key: {'total': int, 'processed': int, 'failed': int, 'is_processing': bool}}
+llm_processing_progress = {}
+
 @app.route('/api/auto/stop', methods=['POST'])
 def auto_stop():
     """停止当前的自动处理流程"""
@@ -1008,14 +1102,68 @@ def auto_stop():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/auto/clear-processing-status', methods=['POST'])
+def clear_processing_status():
+    """清除处理状态标志（用于解决卡住的状态）"""
+    try:
+        data = request.json
+        batch_id = data.get('batch_id')
+        
+        global llm_processing_progress, kb_upload_progress
+        
+        if batch_id:
+            # 清除特定批次的状态
+            if batch_id in llm_processing_progress:
+                llm_processing_progress[batch_id]['is_processing'] = False
+                log_activity(f"Cleared LLM processing status for batch: {batch_id}")
+            
+            if batch_id in kb_upload_progress:
+                kb_upload_progress[batch_id]['is_uploading'] = False
+                log_activity(f"Cleared KB upload status for batch: {batch_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'已清除批次 {batch_id} 的处理状态'
+            })
+        else:
+            # 清除所有批次的状态
+            for key in llm_processing_progress:
+                llm_processing_progress[key]['is_processing'] = False
+            for key in kb_upload_progress:
+                kb_upload_progress[key]['is_uploading'] = False
+            
+            log_activity("Cleared all processing status flags")
+            return jsonify({
+                'success': True,
+                'message': '已清除所有处理状态'
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # 全自动处理流程API
 @app.route('/api/auto/clean', methods=['POST'])
 def auto_clean():
     """全自动流程 - 步骤1: 邮件清洗"""
     try:
-        data = request.json
+        # 安全获取请求数据
+        try:
+            if not request.is_json:
+                log_activity("Email cleaning error: Request is not JSON")
+                return jsonify({'success': False, 'error': '请求必须是JSON格式'}), 400
+            
+            data = request.get_json(silent=True)
+            if not data:
+                log_activity("Email cleaning error: Request JSON is None or invalid")
+                return jsonify({'success': False, 'error': '请求数据为空或格式错误'}), 400
+        except Exception as e:
+            log_activity(f"Email cleaning error: Failed to parse request JSON: {str(e)}")
+            return jsonify({'success': False, 'error': f'解析请求数据失败: {str(e)}'}), 400
+        
         batch_ids = data.get('batch_ids', [])
         skip_if_exists = data.get('skip_if_exists', True)  # 默认启用智能跳过
+        
+        log_activity(f"Email cleaning request received: batch_ids={batch_ids}, skip_if_exists={skip_if_exists}")
         
         upload_dir = Path(DIRECTORIES["upload_dir"])
         processed_dir = Path(DIRECTORIES["processed_dir"])
@@ -1108,15 +1256,40 @@ def auto_llm_process():
         # 清除之前的停止标志
         global_stop_event.clear()
         
-        data = request.json
+        # 安全获取请求数据
+        try:
+            if not request.is_json:
+                log_activity("LLM processing error: Request is not JSON")
+                return jsonify({'success': False, 'error': '请求必须是JSON格式'}), 400
+            
+            data = request.get_json(silent=True)
+            if not data:
+                log_activity("LLM processing error: Request JSON is None or invalid")
+                return jsonify({'success': False, 'error': '请求数据为空或格式错误'}), 400
+        except Exception as e:
+            log_activity(f"LLM processing error: Failed to parse request JSON: {str(e)}")
+            return jsonify({'success': False, 'error': f'解析请求数据失败: {str(e)}'}), 400
+        
         api_key = data.get('api_key')
         delay = data.get('delay', 1)  # 默认1秒间隔
         batch_ids = data.get('batch_ids', [])
         skip_if_exists = data.get('skip_if_exists', True)  # 默认启用智能跳过
         max_workers = data.get('max_workers', 1)  # 并发数，默认1个（串行）
         
+        # 确保 batch_ids 是列表格式
+        if batch_ids and not isinstance(batch_ids, list):
+            if isinstance(batch_ids, str):
+                batch_ids = [batch_ids]
+            else:
+                log_activity(f"LLM processing error: Invalid batch_ids type: {type(batch_ids)}")
+                batch_ids = []
+        
         if not api_key:
+            log_activity("LLM processing error: Missing API Key")
             return jsonify({'success': False, 'error': '缺少API Key'}), 400
+        
+        # 记录请求参数（隐藏敏感信息）
+        log_activity(f"LLM processing request: batch_ids={batch_ids}, delay={delay}, max_workers={max_workers}, skip_if_exists={skip_if_exists}")
         
         processed_dir = Path(DIRECTORIES["processed_dir"])
         final_dir = Path(DIRECTORIES["final_output_dir"])
@@ -1202,8 +1375,52 @@ def auto_llm_process():
         # 记录去重后的实际文件数
         total_files_after_dedup = len(md_files)
         log_activity(f"LLM processing: total {total_files_after_dedup} files to process after deduplication")
+        
+        # 检查有多少文件实际上需要处理（不包括已存在的文件）
+        files_needing_processing = []
+        for md_file in md_files:
+            # 确定输出文件路径
+            if md_file.parent != processed_dir:
+                batch_name = md_file.parent.name
+                batch_final_dir = final_dir / batch_name
+                output_file = batch_final_dir / md_file.name
+            else:
+                output_file = final_dir / md_file.name
+            
+            # 只添加不存在的文件
+            if not output_file.exists():
+                files_needing_processing.append(md_file)
+        
+        # 如果所有文件都已处理过，直接返回成功
+        if not files_needing_processing:
+            log_activity(f"All {total_files_after_dedup} files already processed, nothing to do")
+            # 更新批次状态
+            if batch_ids:
+                for batch_id in batch_ids:
+                    update_batch_status_file(batch_id, 'llm_processed', True)
+            
+            return jsonify({
+                'success': True,
+                'processed_count': total_files_after_dedup,
+                'failed_count': 0,
+                'total_files_after_dedup': total_files_after_dedup,
+                'message': f'所有文件已处理完成（共 {total_files_after_dedup} 个文件）',
+                'all_already_processed': True
+            })
+        
+        log_activity(f"Found {len(files_needing_processing)} files that need processing (out of {total_files_after_dedup} total)")
         log_activity(f"LLM processing: concurrency set to {max_workers}")
         log_disk_usage("[LLM处理前] ")
+        
+        # 初始化全局进度跟踪
+        global llm_processing_progress
+        batch_key = batch_ids[0] if batch_ids else 'default'
+        llm_processing_progress[batch_key] = {
+            'total': total_files_after_dedup,
+            'processed': 0,
+            'failed': 0,
+            'is_processing': True
+        }
         
         # 初始化GPTBots API客户端
         client = GPTBotsAPI(api_key)
@@ -1297,12 +1514,24 @@ def auto_llm_process():
                         log_activity(f"[{current_count}/{total_files_after_dedup}] Successfully processed: {md_file.name}")
                         return True
                     else:
-                        log_activity(f"LLM返回空内容: {md_file.name}")
+                        log_activity(f"LLM returned empty content: {md_file.name}")
                         with count_lock:
                             failed_count += 1
                         return False
                 else:
-                    log_activity(f"LLM call failed: {md_file.name}")
+                    # 记录响应详情以便排查
+                    if response:
+                        if isinstance(response, dict):
+                            # 打印完整的错误响应
+                            error_code = response.get('code', 'N/A')
+                            error_msg = response.get('message', 'N/A')
+                            log_activity(f"LLM call failed (no output): {md_file.name}")
+                            log_activity(f"  Error code: {error_code}, Error message: {error_msg}")
+                            log_activity(f"  Full response keys: {list(response.keys())}")
+                        else:
+                            log_activity(f"LLM call failed (no output): {md_file.name}, response type: {type(response)}")
+                    else:
+                        log_activity(f"LLM call failed (no response): {md_file.name}")
                     with count_lock:
                         failed_count += 1
                     return False
@@ -1314,31 +1543,42 @@ def auto_llm_process():
                 return False
         
         # 并发处理文件
-        if max_workers > 1:
-            # 使用线程池并发处理
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            import threading
-            
-            log_activity(f"使用并发模式处理 (workers={max_workers})")
-            
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # 提交所有任务
-                futures = {executor.submit(process_single_file, md_file): md_file for md_file in md_files}
+        try:
+            if max_workers > 1:
+                # 使用线程池并发处理
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import threading
                 
-                # 等待完成，添加延迟避免过快
-                for future in as_completed(futures):
+                log_activity(f"使用并发模式处理 (workers={max_workers})")
+                
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # 提交所有任务
+                    futures = {executor.submit(process_single_file, md_file): md_file for md_file in files_needing_processing}
+                    
+                    # 等待完成，添加延迟避免过快
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                            # 并发时的延迟：总延迟/并发数，避免API限流
+                            time.sleep(delay / max_workers)
+                        except Exception as e:
+                            log_activity(f"并发任务异常: {str(e)}")
+            else:
+                # 串行处理（兼容模式）
+                log_activity(f"使用串行模式处理")
+                for md_file in files_needing_processing:
                     try:
-                        future.result()
-                        # 并发时的延迟：总延迟/并发数，避免API限流
-                        time.sleep(delay / max_workers)
+                        process_single_file(md_file)
+                        time.sleep(delay)  # 延迟避免API限流
                     except Exception as e:
-                        log_activity(f"并发任务异常: {str(e)}")
-        else:
-            # 串行处理（兼容模式）
-            log_activity(f"使用串行模式处理")
-            for md_file in md_files:
-                process_single_file(md_file)
-                time.sleep(delay)  # 延迟避免API限流
+                        # 单个文件处理失败不应该中断整个流程，继续处理下一个
+                        log_activity(f"处理文件时发生异常，继续处理下一个: {md_file.name}, 错误: {str(e)}")
+                        continue
+        except Exception as e:
+            # 处理循环中的异常不应该中断，应该记录并继续
+            log_activity(f"文件处理循环中的异常: {str(e)}")
+            import traceback
+            log_activity(f"处理循环异常堆栈: {traceback.format_exc()}")
         
         # 更新批次状态
         if batch_ids and processed_count > 0:
@@ -1347,6 +1587,12 @@ def auto_llm_process():
         
         log_activity(f"LLM processing completed: {processed_count} successful, {failed_count} failed")
         log_disk_usage("[LLM处理后] ")
+        
+        # 标记处理完成
+        if batch_key in llm_processing_progress:
+            llm_processing_progress[batch_key]['is_processing'] = False
+            llm_processing_progress[batch_key]['processed'] = processed_count
+            llm_processing_progress[batch_key]['failed'] = failed_count
         
         if processed_count > 0:
             return jsonify({
@@ -1372,6 +1618,28 @@ def auto_llm_process():
         log_activity(f"错误堆栈: {error_trace}")
         print(f"LLM处理异常: {str(e)}")
         print(f"错误堆栈:\n{error_trace}")
+        
+        # 异常时也标记处理完成，并保存已处理的进度
+        if 'batch_key' in locals() and batch_key in llm_processing_progress:
+            llm_processing_progress[batch_key]['is_processing'] = False
+            # 如果有部分处理成功，保存进度
+            if 'processed_count' in locals():
+                llm_processing_progress[batch_key]['processed'] = processed_count
+            if 'failed_count' in locals():
+                llm_processing_progress[batch_key]['failed'] = failed_count
+        
+        # 如果已有部分文件处理成功，即使发生异常也返回部分成功的结果
+        if 'processed_count' in locals() and processed_count > 0:
+            log_activity(f"LLM处理部分完成: {processed_count} 成功，发生异常但已处理的文件已保存")
+            return jsonify({
+                'success': True,
+                'processed_count': processed_count,
+                'failed_count': failed_count if 'failed_count' in locals() else 0,
+                'total_files_after_dedup': total_files_after_dedup if 'total_files_after_dedup' in locals() else 0,
+                'message': f'LLM处理部分完成: 成功 {processed_count} 个（处理过程中发生异常: {str(e)}）',
+                'warning': f'处理过程中发生异常: {str(e)}'
+            })
+        
         return jsonify({'success': False, 'error': str(e), 'traceback': error_trace}), 500
 
 
@@ -1479,21 +1747,21 @@ def auto_upload_kb():
         
         # 批次模式需要逐个上传文件，非批次模式可以使用目录上传
         if batch_dirs:
-            # 批次模式：逐个文件上传
+            # 批次模式：使用并发上传提高速度
             successful_uploads = 0
             failed_uploads = 0
             
-            for md_file in md_files:
+            # 使用线程锁保护计数器
+            from threading import Lock
+            upload_lock = Lock()
+            
+            # 定义单个文件上传函数
+            def upload_single_file(md_file):
+                nonlocal successful_uploads, failed_uploads
                 try:
-                    log_activity(f"上传文件到知识库: {md_file.name}")
-                    log_activity(f"  - 知识库ID: {kb_id}")
-                    log_activity(f"  - API Key: {api_key[:8]}...")
-                    
                     # 读取文件内容
                     with open(md_file, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    
-                    log_activity(f"  - 文件大小: {len(content)} 字符")
                     
                     # 构建上传参数
                     upload_params = {
@@ -1505,37 +1773,60 @@ def auto_upload_kb():
                     if chunk_token:
                         upload_params['chunk_token'] = chunk_token
                         upload_params['splitter'] = "PARAGRAPH"
-                        log_activity(f"  - 分块模式: Token({chunk_token})")
                     else:
-                        # upload_markdown_content 不支持 chunk_separator，使用默认的 chunk_token
                         upload_params['chunk_token'] = 600
                         upload_params['splitter'] = "PARAGRAPH"
-                        log_activity(f"注意: 批次模式暂不支持自定义分隔符，使用默认Token分块(600)")
                     
                     # 上传单个文件
-                    log_activity(f"  - 调用API上传...")
                     result = kb_client.upload_markdown_content(**upload_params)
-                    log_activity(f"  - API响应: {result}")
                     
-                    if result and 'error' not in result:
-                        successful_uploads += 1
-                        kb_upload_progress[batch_key]['uploaded'] = successful_uploads  # 更新进度
-                        log_activity(f"成功上传: {md_file.name}")
-                    else:
-                        failed_uploads += 1
-                        log_activity(f"Upload failed: {md_file.name}, error: {result.get('error', 'Unknown error')}")
+                    with upload_lock:
+                        if result and 'error' not in result:
+                            successful_uploads += 1
+                            kb_upload_progress[batch_key]['uploaded'] = successful_uploads
+                            log_activity(f"✓ Uploaded: {md_file.name}")
+                        else:
+                            failed_uploads += 1
+                            log_activity(f"✗ Upload failed: {md_file.name}, error: {result.get('error', 'Unknown error')}")
                     
-                    # 延迟避免API限流
-                    time.sleep(0.5)
+                    return True
                     
                 except Exception as e:
-                    failed_uploads += 1
-                    kb_upload_progress[batch_key]['uploaded'] = successful_uploads  # 更新进度（失败也算完成）
-                    log_activity(f"上传异常 {md_file.name}: {str(e)}")
+                    with upload_lock:
+                        failed_uploads += 1
+                        kb_upload_progress[batch_key]['uploaded'] = successful_uploads
+                        log_activity(f"✗ Upload error {md_file.name}: {str(e)}")
+                    return False
+            
+            # 使用线程池并发上传（3个并发，平衡速度和API压力）
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            max_upload_workers = 3  # 3个文件同时上传
+            
+            log_activity(f"Starting concurrent upload with {max_upload_workers} workers")
+            
+            with ThreadPoolExecutor(max_workers=max_upload_workers) as executor:
+                futures = {executor.submit(upload_single_file, f): f for f in md_files}
+                
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                        # 小延迟避免过快（每个worker都有延迟）
+                        time.sleep(0.5)
+                    except Exception as e:
+                        log_activity(f"Upload task exception: {str(e)}")
             
             # 更新批次状态 - 标记为已上传并添加知识库名称标签
+            # 即使后续发生异常，也要确保状态已更新
             if batch_ids and successful_uploads > 0:
-                # 获取知识库名称
+                # 先更新批次状态（无论是否成功获取知识库名称）
+                try:
+                    for batch_id in batch_ids:
+                        update_batch_status_file(batch_id, 'uploaded_to_kb', True)
+                        log_activity(f"Batch {batch_id} status updated to 'uploaded_to_kb': True")
+                except Exception as e:
+                    log_activity(f"Warning: Failed to update batch status: {str(e)}")
+                
+                # 获取知识库名称（可选操作，失败不影响主流程）
                 kb_name = None
                 try:
                     log_activity(f"正在获取知识库名称，KB ID: {kb_id}")
@@ -1569,21 +1860,17 @@ def auto_upload_kb():
                         log_activity(f"无法从响应中解析知识库列表")
                         
                 except Exception as e:
-                    log_activity(f"Failed to get knowledge base name: {str(e)}")
+                    log_activity(f"Failed to get knowledge base name (non-critical): {str(e)}")
                 
-                log_activity(f"Knowledge base upload completed: {successful_uploads} successful, {failed_uploads} failed")
-                log_disk_usage("[上传后] ")
-                
-                for batch_id in batch_ids:
-                    update_batch_status_file(batch_id, 'uploaded_to_kb', True)
-                    # 如果成功获取知识库名称，保存到批次元数据
-                    if kb_name:
-                        upload_dir = Path(DIRECTORIES["upload_dir"])
-                        batch_dir = upload_dir / batch_id
-                        batch_info_file = batch_dir / ".batch_info.json"
-                        
-                        if batch_info_file.exists():
-                            try:
+                # 如果成功获取知识库名称，保存到批次元数据（可选操作，失败不影响主流程）
+                if kb_name:
+                    for batch_id in batch_ids:
+                        try:
+                            upload_dir = Path(DIRECTORIES["upload_dir"])
+                            batch_dir = upload_dir / batch_id
+                            batch_info_file = batch_dir / ".batch_info.json"
+                            
+                            if batch_info_file.exists():
                                 with open(batch_info_file, 'r', encoding='utf-8') as f:
                                     batch_info = json.load(f)
                                 
@@ -1593,10 +1880,15 @@ def auto_upload_kb():
                                     json.dump(batch_info, f, ensure_ascii=False, indent=2)
                                 
                                 log_activity(f"Batch {batch_id} automatically tagged with knowledge base: {kb_name}")
-                            except Exception as e:
-                                log_activity(f"Failed to save knowledge base name to batch {batch_id}: {str(e)}")
-                    else:
-                        log_activity(f"Warning: Unable to get knowledge base name, batch {batch_id} needs manual tagging")
+                            else:
+                                log_activity(f"Warning: Batch info file not found for {batch_id}, cannot save KB name")
+                        except Exception as e:
+                            log_activity(f"Failed to save knowledge base name to batch {batch_id} (non-critical): {str(e)}")
+                else:
+                    log_activity(f"Warning: Unable to get knowledge base name, batches need manual tagging")
+            
+            log_activity(f"Knowledge base upload completed: {successful_uploads} successful, {failed_uploads} failed")
+            log_disk_usage("[上传后] ")
             
             if successful_uploads > 0:
                 kb_upload_progress[batch_key]['is_uploading'] = False  # 标记上传完成
@@ -1638,9 +1930,38 @@ def auto_upload_kb():
         else:
             return jsonify({'success': False, 'error': result.get('error', '上传失败')}), 500
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        log_activity(f"KB upload error: {str(e)}")
+        log_activity(f"错误堆栈: {error_trace}")
+        
+        # 即使发生异常，如果有部分上传成功，也要更新批次状态
+        if 'batch_ids' in locals() and 'successful_uploads' in locals():
+            if batch_ids and successful_uploads > 0:
+                try:
+                    log_activity(f"Exception occurred but {successful_uploads} files uploaded successfully, updating batch status...")
+                    for batch_id in batch_ids:
+                        update_batch_status_file(batch_id, 'uploaded_to_kb', True)
+                        log_activity(f"Batch {batch_id} status updated to 'uploaded_to_kb': True (despite exception)")
+                except Exception as status_error:
+                    log_activity(f"Failed to update batch status after exception: {str(status_error)}")
+        
+        # 标记上传完成
         if 'batch_key' in locals() and batch_key in kb_upload_progress:
             kb_upload_progress[batch_key]['is_uploading'] = False  # 异常时也标记完成
-        return jsonify({'success': False, 'error': str(e)}), 500
+        
+        # 如果有部分成功，返回部分成功的结果而不是完全失败
+        if 'successful_uploads' in locals() and successful_uploads > 0:
+            log_activity(f"Returning partial success: {successful_uploads} files uploaded despite exception")
+            return jsonify({
+                'success': True,
+                'uploaded_count': successful_uploads,
+                'failed_count': failed_uploads if 'failed_uploads' in locals() else 0,
+                'message': f'知识库上传部分完成: 成功 {successful_uploads} 个（处理过程中发生异常: {str(e)}）',
+                'warning': f'处理过程中发生异常: {str(e)}'
+            })
+        
+        return jsonify({'success': False, 'error': str(e), 'traceback': error_trace}), 500
 
 
 # ========== 单批次完整处理 API（用于并行处理） ==========
@@ -1928,7 +2249,7 @@ def process_single_batch():
                         else:
                             failed_uploads += 1
                         
-                        time.sleep(0.5)  # API限流
+                        time.sleep(2.0)  # API限流（增加到2秒，降低并发）
                     
                     except Exception as e:
                         failed_uploads += 1

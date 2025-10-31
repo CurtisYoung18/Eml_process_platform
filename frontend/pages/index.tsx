@@ -6,6 +6,7 @@ export default function HomePage() {
   const router = useRouter()
   const [showWelcome, setShowWelcome] = useState(true)
   const [iframeLoaded, setIframeLoaded] = useState(false)
+  const [iframeError, setIframeError] = useState(false)
 
   useEffect(() => {
     // 1.5秒后隐藏欢迎动画
@@ -14,6 +15,18 @@ export default function HomePage() {
     }, 1800)
     return () => clearTimeout(timer)
   }, [])
+
+  useEffect(() => {
+    // 超时处理：如果30秒后iframe还没加载完成，隐藏加载动画
+    const timeoutTimer = setTimeout(() => {
+      if (!iframeLoaded) {
+        console.warn('Iframe loading timeout, hiding loading indicator')
+        setIframeLoaded(true) // 隐藏加载动画，即使iframe可能未完全加载
+      }
+    }, 30000) // 30秒超时
+
+    return () => clearTimeout(timeoutTimer)
+  }, [iframeLoaded])
 
   const handleEmailManagement = () => {
     router.push('/login')
@@ -57,19 +70,59 @@ export default function HomePage() {
 
       {/* QA问答iframe */}
       <div className="qa-iframe-container">
-        {!iframeLoaded && (
+        {!iframeLoaded && !iframeError && (
           <div className="iframe-loading">
             <div className="loading-spinner"></div>
             <p>加载问答系统...</p>
           </div>
         )}
+        {iframeError && (
+          <div className="iframe-error">
+            <p>⚠️ 无法加载问答系统</p>
+            <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '8px' }}>
+              请检查网络连接或联系管理员
+            </p>
+            <button 
+              onClick={() => {
+                setIframeError(false)
+                setIframeLoaded(false)
+                // 重新加载iframe
+                const iframe = document.querySelector('.qa-iframe') as HTMLIFrameElement
+                if (iframe) {
+                  iframe.src = iframe.src
+                }
+              }}
+              style={{
+                marginTop: '16px',
+                padding: '8px 16px',
+                background: '#667eea',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              重试
+            </button>
+          </div>
+        )}
         <iframe
           src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
-        
           className={`qa-iframe ${iframeLoaded ? 'loaded' : ''}`}
-          onLoad={() => setIframeLoaded(true)}
+          onLoad={() => {
+            console.log('Iframe loaded successfully')
+            setIframeLoaded(true)
+            setIframeError(false)
+          }}
+          onError={() => {
+            console.error('Iframe loading error')
+            setIframeError(true)
+            setIframeLoaded(true) // 隐藏加载动画
+          }}
           title="知识库问答"
-          allow="microphone *"
+          allow="microphone *; camera *; geolocation *; autoplay *; fullscreen *"
+          referrerPolicy="no-referrer-when-downgrade"
+          loading="eager"
         />
       </div>
 
@@ -227,6 +280,25 @@ export default function HomePage() {
         }
 
         .iframe-loading p {
+          font-size: 16px;
+          font-weight: 500;
+        }
+
+        .iframe-error {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          text-align: center;
+          color: #e53e3e;
+          padding: 24px;
+          background: rgba(255, 255, 255, 0.95);
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .iframe-error p {
+          margin: 0;
           font-size: 16px;
           font-weight: 500;
         }
