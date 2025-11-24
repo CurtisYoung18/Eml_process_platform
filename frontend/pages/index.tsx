@@ -107,7 +107,7 @@ export default function HomePage() {
           </div>
         )}
         <iframe
-          src="http://10.52.20.41:19080/widget/eerfztrnqsiqkxj85aobcwb/chat.html"
+          src="https://www.gptbots.ai/widget/eesy0snwfrcoqgiib8x0nlm/chat.html"
           className={`qa-iframe ${iframeLoaded ? 'loaded' : ''}`}
           onLoad={() => {
             console.log('Iframe loaded successfully')
