@@ -213,15 +213,22 @@ def fetch_knowledge_bases():
             # 返回更友好的错误信息
             return jsonify({
                 'success': False, 
-                'error': '无法获取知识库列表，请检查API Key是否正确或是否有权限访问知识库'
+                'error': '无法获取知识库列表，请检查API Key是否正确、网络连接是否正常，或知识库服务是否可访问'
             }), 200  # 改为200状态码，让前端能正确处理
             
     except Exception as e:
-        log_activity(f"Error getting knowledge base list: {str(e)}")
+        error_msg = str(e)
+        # 检查是否是连接超时错误
+        if 'timeout' in error_msg.lower() or 'Connection' in error_msg:
+            error_msg = '无法连接到知识库服务，请检查网络连接或服务地址配置'
+        elif 'Max retries exceeded' in error_msg:
+            error_msg = '知识库服务连接超时，请检查服务是否正常运行'
+        
+        log_activity(f"Error getting knowledge base list: {error_msg}")
         return jsonify({
             'success': False, 
-            'error': f'获取知识库列表失败: {str(e)}'
-        }), 200  # 改为200状态码
+            'error': f'获取知识库列表失败: {error_msg}'
+        }), 200  # 改为200状态码，让前端能正确处理
 
 
 @app.route('/api/stats', methods=['GET'])
@@ -873,30 +880,6 @@ def download_file():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/knowledge-bases', methods=['POST'])
-def get_knowledge_bases():
-    """获取知识库列表"""
-    try:
-        data = request.json
-        api_key = data.get('api_key')
-        
-        if not api_key:
-            return jsonify({'success': False, 'error': '缺少API Key'}), 400
-        
-        kb_api = KnowledgeBaseAPI(api_key)
-        response = kb_api.get_knowledge_bases()
-        
-        if response and 'data' in response and 'list' in response['data']:
-            knowledge_bases = response['data']['list']
-            return jsonify({
-                'success': True,
-                'knowledge_bases': knowledge_bases
-            })
-        else:
-            return jsonify({'success': False, 'error': '获取知识库列表失败'}), 500
-            
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/upload-to-kb', methods=['POST'])
